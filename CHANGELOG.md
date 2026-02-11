@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Specialist Coding & QA Agents
+- **@mesh-six/qa-tester@0.1.0**: QA & Test Automation agent
+  - Capabilities: `test-planning`, `test-generation`, `test-analysis`, `qa-review`
+  - Framework expertise: Playwright, Cypress, Vitest, Jest, Puppeteer
+  - Structured output: TestPlan, TestCode, TestAnalysis schemas
+  - Tools: analyze_test_output, search_test_patterns, get_framework_docs
+  - Page Object Model patterns, fixtures, accessibility testing
+- **@mesh-six/api-coder@0.1.0**: Backend API development agent
+  - Capabilities: `api-design`, `backend-coding`, `code-review`, `bug-fix`
+  - Languages: TypeScript (Bun/Node.js) and Go
+  - Frameworks: Hono, Express, Fastify (TS); Gin, Fiber, Echo (Go)
+  - Structured output: APIDesign, CodeGeneration, CodeReview schemas
+  - Tools: search_patterns, analyze_openapi, get_framework_template
+- **@mesh-six/ui-agent@0.1.0**: Frontend UI development agent
+  - Capabilities: `ui-design`, `component-generation`, `screen-generation`, `ui-review`
+  - Platforms: React (Next.js, Tailwind) and React Native (Expo, NativeWind)
+  - Atomic design patterns, accessibility-first approach
+  - Structured output: UIDesign, ComponentCode, UIReview schemas
+  - Tools: search_patterns, get_component_template, analyze_accessibility
+- Kubernetes manifests for all three agents
+
 ### Added - Milestone 3 & 4: Specialist Agents + Project Manager
 - **@mesh-six/architect-agent@0.1.0**: Architectural consultation agent
   - Capabilities: `tech-consultation`, `architecture-review`

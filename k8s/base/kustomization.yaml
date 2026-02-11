@@ -11,6 +11,9 @@ resources:
   - architect-agent/
   - researcher-agent/
   - project-manager/
+  - qa-tester/
+  - api-coder/
+  - ui-agent/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

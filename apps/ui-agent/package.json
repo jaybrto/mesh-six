@@ -1,0 +1,24 @@
+{
+  "name": "@mesh-six/ui-agent",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "start": "bun run dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@mesh-six/core": "workspace:*",
+    "@dapr/dapr": "^3.4.2",
+    "@ai-sdk/openai": "^1.2.0",
+    "ai": "^4.1.52",
+    "hono": "^4.7.4",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.4",
+    "typescript": "^5.7.3"
+  }
+}

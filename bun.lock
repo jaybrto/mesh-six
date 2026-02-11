@@ -13,6 +13,22 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/api-coder": {
+      "name": "@mesh-six/api-coder",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.2.0",
+        "@dapr/dapr": "^3.4.2",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.1.52",
+        "hono": "^4.7.4",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/architect-agent": {
       "name": "@mesh-six/architect-agent",
       "version": "0.1.0",
@@ -62,6 +78,22 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/qa-tester": {
+      "name": "@mesh-six/qa-tester",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.2.0",
+        "@dapr/dapr": "^3.4.2",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.1.52",
+        "hono": "^4.7.4",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/researcher-agent": {
       "name": "@mesh-six/researcher-agent",
       "version": "0.1.0",
@@ -83,6 +115,22 @@
     "apps/simple-agent": {
       "name": "@mesh-six/simple-agent",
       "version": "0.2.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.2.0",
+        "@dapr/dapr": "^3.4.2",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.1.52",
+        "hono": "^4.7.4",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
+      },
+    },
+    "apps/ui-agent": {
+      "name": "@mesh-six/ui-agent",
+      "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
         "@dapr/dapr": "^3.4.2",
@@ -193,6 +241,8 @@
 
     "@langchain/core": ["@langchain/core@0.3.80", "", { "dependencies": { "@cfworker/json-schema": "^4.0.2", "ansi-styles": "^5.0.0", "camelcase": "6", "decamelize": "1.2.0", "js-tiktoken": "^1.0.12", "langsmith": "^0.3.67", "mustache": "^4.2.0", "p-queue": "^6.6.2", "p-retry": "4", "uuid": "^10.0.0", "zod": "^3.25.32", "zod-to-json-schema": "^3.22.3" } }, "sha512-vcJDV2vk1AlCwSh3aBm/urQ1ZrlXFFBocv11bz/NBUfLWD5/UDNMzwPdaAd2dKvNmTWa9FM2lirLU3+JCf4cRA=="],
 
+    "@mesh-six/api-coder": ["@mesh-six/api-coder@workspace:apps/api-coder"],
+
     "@mesh-six/architect-agent": ["@mesh-six/architect-agent@workspace:apps/architect-agent"],
 
     "@mesh-six/core": ["@mesh-six/core@workspace:packages/core"],
@@ -201,9 +251,13 @@
 
     "@mesh-six/project-manager": ["@mesh-six/project-manager@workspace:apps/project-manager"],
 
+    "@mesh-six/qa-tester": ["@mesh-six/qa-tester@workspace:apps/qa-tester"],
+
     "@mesh-six/researcher-agent": ["@mesh-six/researcher-agent@workspace:apps/researcher-agent"],
 
     "@mesh-six/simple-agent": ["@mesh-six/simple-agent@workspace:apps/simple-agent"],
+
+    "@mesh-six/ui-agent": ["@mesh-six/ui-agent@workspace:apps/ui-agent"],
 
     "@mistralai/mistralai": ["@mistralai/mistralai@1.14.0", "", { "dependencies": { "ws": "^8.18.0", "zod": "^3.25.0 || ^4.0.0", "zod-to-json-schema": "^3.24.1" } }, "sha512-6zaj2f2LCd37cRpBvCgctkDbXtYBlAC85p+u4uU/726zjtsI+sdVH34qRzkm9iE3tRb8BoaiI0/P7TD+uMvLLQ=="],
 
