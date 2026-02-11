@@ -1,0 +1,38 @@
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: agent-resiliency
+  namespace: mesh-six
+spec:
+  policies:
+    timeouts:
+      general: 30s
+      longRunning: 120s
+
+    retries:
+      pubsubRetry:
+        policy: exponential
+        maxInterval: 15s
+        maxRetries: 3
+
+      stateRetry:
+        policy: constant
+        duration: 1s
+        maxRetries: 3
+
+    circuitBreakers:
+      agentBreaker:
+        maxRequests: 1
+        interval: 10s
+        timeout: 30s
+        trip: consecutiveFailures >= 5
+
+  targets:
+    components:
+      agent-pubsub:
+        outbound:
+          retry: pubsubRetry
+
+      agent-statestore:
+        outbound:
+          retry: stateRetry

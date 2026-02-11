@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simple-agent
+  namespace: mesh-six
+  labels:
+    app: simple-agent
+    app.kubernetes.io/part-of: mesh-six
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: simple-agent
+  template:
+    metadata:
+      labels:
+        app: simple-agent
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "simple-agent"
+        dapr.io/app-port: "3000"
+        dapr.io/log-level: "info"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+    spec:
+      containers:
+        - name: simple-agent
+          image: registry.bto.bar/mesh-six/simple-agent:latest
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: AGENT_ID
+              value: "simple-agent"
+            - name: AGENT_NAME
+              value: "Simple Agent"
+            - name: APP_PORT
+              value: "3000"
+            - name: LITELLM_BASE_URL
+              value: "http://litellm.litellm:4000/v1"
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-secret
+                  key: api-key
+            - name: LLM_MODEL
+              value: "anthropic/claude-sonnet-4-20250514"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"

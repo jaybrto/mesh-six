@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mesh-six
+
+resources:
+  - namespace.yaml
+  - secrets.yaml
+  - orchestrator/
+  - simple-agent/
+
+commonLabels:
+  app.kubernetes.io/part-of: mesh-six
