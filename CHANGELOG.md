@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Deployer Agents
+- **@mesh-six/argocd-deployer@0.1.0**: GitOps deployment agent via ArgoCD
+  - Capabilities: `deploy-service` (0.9), `rollback-service` (0.9), `sync-gitops` (1.0)
+  - ArgoCD API integration for application lifecycle management
+  - Tools: get_status, sync, create_application, rollback, list_applications, delete_application
+  - Deployment planning with LLM-powered risk assessment
+  - Memory integration for deployment history
+  - Health check against ArgoCD server connectivity
+- **@mesh-six/kubectl-deployer@0.1.0**: Direct Kubernetes deployment & debugging agent
+  - Capabilities: `deploy-service` (0.7), `rollback-service` (0.7), `debug-pods` (1.0), `inspect-cluster` (0.9)
+  - Direct kubectl execution for emergency deployments and debugging
+  - Tools: get_pods, get_deployments, describe, logs, events, apply, delete, rollout operations, scale, restart
+  - LLM-powered debug analysis with structured findings
+  - RBAC ServiceAccount with cluster-wide access for k8s operations
+  - Memory integration for debugging patterns
+- Kubernetes manifests for both deployer agents with Dapr sidecar annotations
+
 ### Added - Specialist Coding & QA Agents
 - **@mesh-six/qa-tester@0.1.0**: QA & Test Automation agent
   - Capabilities: `test-planning`, `test-generation`, `test-analysis`, `qa-review`

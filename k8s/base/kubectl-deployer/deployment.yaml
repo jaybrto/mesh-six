@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubectl-deployer
+  namespace: mesh-six
+  labels:
+    app: kubectl-deployer
+    app.kubernetes.io/part-of: mesh-six
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubectl-deployer
+  template:
+    metadata:
+      labels:
+        app: kubectl-deployer
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "kubectl-deployer"
+        dapr.io/app-port: "3000"
+        dapr.io/log-level: "info"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+    spec:
+      serviceAccountName: kubectl-deployer
+      containers:
+        - name: kubectl-deployer
+          image: registry.bto.bar/mesh-six/kubectl-deployer:latest
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: AGENT_ID
+              value: "kubectl-deployer"
+            - name: AGENT_NAME
+              value: "Kubectl Deployer Agent"
+            - name: APP_PORT
+              value: "3000"
+            - name: LITELLM_BASE_URL
+              value: "http://litellm.litellm:4000/v1"
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-secret
+                  key: api-key
+            - name: LLM_MODEL
+              value: "anthropic/claude-sonnet-4-20250514"
+            - name: MEMORY_ENABLED
+              value: "true"
+            - name: OLLAMA_URL
+              value: "http://ollama.ollama:11434"
+            - name: OLLAMA_MODEL
+              value: "phi4-mini"
+            - name: OLLAMA_MODEL_EMBED
+              value: "mxbai-embed"
+            - name: PG_PRIMARY_HOST
+              value: "postgres-rw.cloudnative-pg"
+            - name: PG_PRIMARY_PORT
+              value: "5432"
+            - name: PG_PRIMARY_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: username
+            - name: PG_PRIMARY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: PG_PRIMARY_DB
+              value: "mesh_six"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubectl-deployer
+  namespace: mesh-six
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubectl-deployer
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec", "services", "configmaps", "secrets", "events", "namespaces"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubectl-deployer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubectl-deployer
+subjects:
+  - kind: ServiceAccount
+    name: kubectl-deployer
+    namespace: mesh-six

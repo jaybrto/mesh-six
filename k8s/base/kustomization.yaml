@@ -14,6 +14,8 @@ resources:
   - qa-tester/
   - api-coder/
   - ui-agent/
+  - argocd-deployer/
+  - kubectl-deployer/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

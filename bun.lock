@@ -45,6 +45,38 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/argocd-deployer": {
+      "name": "@mesh-six/argocd-deployer",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.2.0",
+        "@dapr/dapr": "^3.4.2",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.1.52",
+        "hono": "^4.7.4",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
+      },
+    },
+    "apps/kubectl-deployer": {
+      "name": "@mesh-six/kubectl-deployer",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.2.0",
+        "@dapr/dapr": "^3.4.2",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.1.52",
+        "hono": "^4.7.4",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/orchestrator": {
       "name": "@mesh-six/orchestrator",
       "version": "0.1.0",
@@ -245,7 +277,11 @@
 
     "@mesh-six/architect-agent": ["@mesh-six/architect-agent@workspace:apps/architect-agent"],
 
+    "@mesh-six/argocd-deployer": ["@mesh-six/argocd-deployer@workspace:apps/argocd-deployer"],
+
     "@mesh-six/core": ["@mesh-six/core@workspace:packages/core"],
+
+    "@mesh-six/kubectl-deployer": ["@mesh-six/kubectl-deployer@workspace:apps/kubectl-deployer"],
 
     "@mesh-six/orchestrator": ["@mesh-six/orchestrator@workspace:apps/orchestrator"],
 
