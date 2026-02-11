@@ -930,11 +930,11 @@ Scenario validation — ArgoCD outage:
 
 ### 3.6 — Milestone 3 Acceptance Criteria
 
-- [ ] ArgoCD deployer can create, sync, and rollback applications
-- [ ] Kubectl deployer can apply manifests and manage pods
-- [ ] Orchestrator correctly routes deploy tasks based on weighted scoring
-- [ ] When ArgoCD health check fails, kubectl deployer receives all deploy tasks
-- [ ] When ArgoCD recovers, it gradually regains primary status
+- [x] ArgoCD deployer can create, sync, and rollback applications (code complete)
+- [x] Kubectl deployer can apply manifests and manage pods (code complete)
+- [ ] Orchestrator correctly routes deploy tasks based on weighted scoring (needs k8s deployment test)
+- [ ] When ArgoCD health check fails, kubectl deployer receives all deploy tasks (needs k8s deployment test)
+- [ ] When ArgoCD recovers, it gradually regains primary status (needs k8s deployment test)
 - [x] Architect agent returns structured tech recommendations
 - [x] Architect stores decisions in Mem0 and references past decisions
 - [x] Researcher agent can perform research via multiple LLM providers
@@ -958,10 +958,25 @@ Scenario validation — ArgoCD outage:
 - Tools: search_web, search_documentation, analyze_repository, search_past_research
 - Stores all research findings in memory for future reference by any agent
 
+**ArgoCD Deployer Agent:**
+- Capabilities: deploy-service (0.9), rollback-service (0.9), sync-gitops (1.0)
+- ArgoCD API integration for application lifecycle management
+- Tools: get_status, sync, create_application, rollback, list_applications, delete_application
+- Deployment planning with LLM-powered risk assessment
+- Health check against ArgoCD server connectivity
+- Memory integration for deployment history
+
+**Kubectl Deployer Agent:**
+- Capabilities: deploy-service (0.7), rollback-service (0.7), debug-pods (1.0), inspect-cluster (0.9)
+- Direct kubectl execution for debugging and emergency deployments
+- Tools: get_pods, get_deployments, describe, logs, events, apply, delete, rollout ops, scale, restart
+- LLM-powered debug analysis with structured DebugResult output
+- RBAC ServiceAccount with cluster-wide permissions
+- Memory integration for debugging patterns
+
 **Remaining Work:**
-- Build ArgoCD Deployer agent
-- Build Kubectl Deployer agent
-- Deploy to k8s and test agent-to-agent consultation
+- Deploy all Milestone 3 agents to k8s and verify weighted routing
+- Test agent-to-agent consultation via Dapr service invocation
 
 ---
 
