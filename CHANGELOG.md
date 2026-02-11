@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Milestone 3: Specialist Agents (in progress)
+- **@mesh-six/architect-agent@0.1.0**: Architectural consultation agent
+  - Capabilities: `tech-consultation`, `architecture-review`
+  - Structured output schema for recommendations (tech stack, deployment strategy, considerations)
+  - Tools for querying cluster state, service health, past decisions, resource usage
+  - Memory integration for storing and retrieving past architectural decisions
+  - Service invocation endpoint (`/consult`) for synchronous consultation
+  - Pub/sub task handling for async dispatch
+  - System prompt encoding Jay's homelab knowledge and preferences
+- Kubernetes manifests for architect-agent deployment
+
 ## [0.2.0] - 2026-02-11 (8327110)
 
 ### Added - Milestone 2: Memory Layer

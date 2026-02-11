@@ -13,6 +13,22 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/architect-agent": {
+      "name": "@mesh-six/architect-agent",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.2.0",
+        "@dapr/dapr": "^3.4.2",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.1.52",
+        "hono": "^4.7.4",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/orchestrator": {
       "name": "@mesh-six/orchestrator",
       "version": "0.1.0",
@@ -31,7 +47,7 @@
     },
     "apps/simple-agent": {
       "name": "@mesh-six/simple-agent",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
         "@dapr/dapr": "^3.4.2",
@@ -47,7 +63,7 @@
     },
     "packages/core": {
       "name": "@mesh-six/core",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@dapr/dapr": "^3.4.2",
         "mem0ai": "^2.2.2",
@@ -137,6 +153,8 @@
     "@js-temporal/polyfill": ["@js-temporal/polyfill@0.3.0", "", { "dependencies": { "big-integer": "^1.6.51", "tslib": "^2.3.1" } }, "sha512-cxxxis19j0WvK3+kUwKrXeXaDBaWxLeRfKqlVz7g50Cly6UgGs2p3wovH9zjtZ4TtjYHDR4De/880+aalduDZQ=="],
 
     "@langchain/core": ["@langchain/core@0.3.80", "", { "dependencies": { "@cfworker/json-schema": "^4.0.2", "ansi-styles": "^5.0.0", "camelcase": "6", "decamelize": "1.2.0", "js-tiktoken": "^1.0.12", "langsmith": "^0.3.67", "mustache": "^4.2.0", "p-queue": "^6.6.2", "p-retry": "4", "uuid": "^10.0.0", "zod": "^3.25.32", "zod-to-json-schema": "^3.22.3" } }, "sha512-vcJDV2vk1AlCwSh3aBm/urQ1ZrlXFFBocv11bz/NBUfLWD5/UDNMzwPdaAd2dKvNmTWa9FM2lirLU3+JCf4cRA=="],
+
+    "@mesh-six/architect-agent": ["@mesh-six/architect-agent@workspace:apps/architect-agent"],
 
     "@mesh-six/core": ["@mesh-six/core@workspace:packages/core"],
 

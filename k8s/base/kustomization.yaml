@@ -8,6 +8,7 @@ resources:
   - secrets.yaml
   - orchestrator/
   - simple-agent/
+  - architect-agent/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six
