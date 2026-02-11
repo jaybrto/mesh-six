@@ -9,6 +9,7 @@ resources:
   - orchestrator/
   - simple-agent/
   - architect-agent/
+  - researcher-agent/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

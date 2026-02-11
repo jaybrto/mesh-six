@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: researcher-agent
+  namespace: mesh-six
+  labels:
+    app: researcher-agent
+    app.kubernetes.io/part-of: mesh-six
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: researcher-agent
+  template:
+    metadata:
+      labels:
+        app: researcher-agent
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "researcher-agent"
+        dapr.io/app-port: "3000"
+        dapr.io/log-level: "info"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+    spec:
+      containers:
+        - name: researcher-agent
+          image: registry.bto.bar/mesh-six/researcher-agent:latest
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: AGENT_ID
+              value: "researcher-agent"
+            - name: AGENT_NAME
+              value: "Researcher Agent"
+            - name: APP_PORT
+              value: "3000"
+            # LiteLLM configuration (primary provider gateway)
+            - name: LITELLM_BASE_URL
+              value: "http://litellm.litellm:4000/v1"
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-secret
+                  key: api-key
+            # Direct provider API keys (optional - for direct access)
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: anthropic-secret
+                  key: api-key
+                  optional: true
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: google-secret
+                  key: api-key
+                  optional: true
+            # Model defaults
+            - name: OLLAMA_MODEL
+              value: "phi4-mini"
+            - name: CLAUDE_MODEL
+              value: "claude-sonnet-4-20250514"
+            - name: GEMINI_MODEL
+              value: "gemini-2.0-flash"
+            # Memory layer configuration
+            - name: MEMORY_ENABLED
+              value: "true"
+            - name: OLLAMA_URL
+              value: "http://ollama.ollama:11434"
+            - name: OLLAMA_MODEL_EMBED
+              value: "mxbai-embed"
+            - name: PG_PRIMARY_HOST
+              value: "postgres-rw.cloudnative-pg"
+            - name: PG_PRIMARY_PORT
+              value: "5432"
+            - name: PG_PRIMARY_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: username
+            - name: PG_PRIMARY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: PG_PRIMARY_DB
+              value: "mesh_six"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

@@ -16,7 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Service invocation endpoint (`/consult`) for synchronous consultation
   - Pub/sub task handling for async dispatch
   - System prompt encoding Jay's homelab knowledge and preferences
-- Kubernetes manifests for architect-agent deployment
+- **@mesh-six/researcher-agent@0.1.0**: Multi-provider research agent
+  - Capabilities: `deep-research`, `market-analysis`, `technical-research`
+  - Multi-provider LLM support: Claude (Anthropic), Gemini (Google), Ollama (local)
+  - Auto provider selection based on task complexity
+  - Research depth options: quick, standard, comprehensive
+  - Tools: web search, documentation search, repository analysis, past research lookup
+  - Structured output schema for research results with key findings, recommendations, sources
+  - Memory integration for storing research findings
+- Kubernetes manifests for architect-agent and researcher-agent deployment
 
 ## [0.2.0] - 2026-02-11 (8327110)
 
