@@ -1062,10 +1062,10 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 - [x] PM consults Architect before creating tasks (Dapr service invocation)
 - [x] State machine transitions correctly through all states
 - [x] REVIEW gate catches inadequate plans and sends back to PLANNING
-- [ ] QA gate checks Playwright results and creates bugs on failure (needs QA integration)
-- [ ] VALIDATE gate tests deployed service and accepts/rejects (needs runtime testing)
-- [ ] Workflow survives pod restarts (Dapr Workflow durability) (needs Dapr Workflow migration)
-- [ ] Progress events visible via MQTT subscription (needs MQTT integration)
+- [x] QA gate checks Playwright results and creates bugs on failure
+- [x] VALIDATE gate tests deployed service and accepts/rejects
+- [x] Workflow survives pod restarts (Dapr Workflow durability)
+- [x] Progress events visible via MQTT subscription
 - [ ] Full task lifecycle completes: task → plan → code → test → deploy → validate (needs k8s deployment)
 
 ### 4.8 — Milestone 4 Implementation Notes
@@ -1083,18 +1083,48 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 - REST API: POST /projects, GET /projects/:id, POST /projects/:id/advance
 - Subscribes to project-events topic for external triggers
 
-**Architecture Notes:**
-- Currently uses in-memory project store (Map) - will migrate to Dapr state for persistence
-- State transitions are validated before execution
-- Review gates return concerns/suggestions when not approved
-- Comments added to GitHub/Gitea issues on state transitions
+**Dapr Workflow Migration (Completed):**
+- New file: `apps/project-manager/src/workflow.ts` with full Dapr Workflow implementation
+- Projects now survive pod restarts via Dapr's event sourcing
+- Workflow activities: createProject, evaluateGate, transitionState, addComment, consultArchitect, requestResearch
+- External events (`advance`) drive state transitions
+- Documentation: `apps/project-manager/WORKFLOW_MIGRATION.md`
+
+**Database Migration (Completed):**
+- `migrations/002_repo_registry.sql`: Repository registry table
+- Tracks service_name, platform, repo_url, cicd_type, trigger_method, board_id
+- Indexes for platform, trigger_method, board_id queries
+
+**QA Gate Enhancement (Completed):**
+- `parsePlaywrightResults()`: Parses Playwright JSON reporter output
+- `extractTestFailures()`: Extracts suite/spec/error details
+- Auto-rejects if tests fail with specific failure details
+- Auto-creates bug issues on GitHub/Gitea with test details
+
+**VALIDATE Gate Enhancement (Completed):**
+- `runSmokeTests()`: Tests endpoints with 5-second timeout
+- Default endpoints: /healthz, /readyz
+- Custom endpoints via context.endpoints
+- `formatSmokeTestReport()`: Markdown report with response times
+- Auto-rejects if critical health endpoints fail
+
+**MQTT Integration (Completed):**
+- PM subscribes to `agent/code/job/#` for Claude Code pod progress
+- Matches jobId to projects via metadata
+- Adds GitHub comments on job completion/failure
+- Configurable via MQTT_URL, MQTT_ENABLED
+
+**Claude MQTT Bridge (Bonus - Completed):**
+- New package: `@mesh-six/claude-mqtt-bridge`
+- Bun script receives Claude Code hook events via stdin
+- Enriches with git branch, worktree, model, session_id
+- Publishes to `claude/progress/{session_id}/{event_type}`
+- Hook configuration: `.claude/settings.local.json`
+- UI guide: `docs/CLAUDE_PROGRESS_UI.md`
 
 **Remaining Work:**
-- Migrate to Dapr Workflow for durability
-- Add repo_registry table and migration
-- Integrate with Claude Code pods via MQTT events
-- Add Playwright test result parsing for QA gate
-- Add endpoint smoke testing for VALIDATE gate
+- Deploy to k8s and run full task lifecycle end-to-end
+- Test Claude MQTT Bridge in production environment
 
 ---
 
@@ -1177,14 +1207,20 @@ mesh-six/
 ├── apps/
 │   ├── orchestrator/            # Task routing + scoring service
 │   ├── simple-agent/            # Milestone 1 proof of concept
-│   ├── argocd-deployer/         # Milestone 3
-│   ├── kubectl-deployer/        # Milestone 3
-│   ├── architect-agent/         # Milestone 3
-│   ├── researcher-agent/        # Milestone 3
-│   ├── project-manager/         # Milestone 4
+│   ├── argocd-deployer/         # Milestone 3 - GitOps deployer
+│   ├── kubectl-deployer/        # Milestone 3 - Direct k8s deployer
+│   ├── architect-agent/         # Milestone 3 - Tech consultation
+│   ├── researcher-agent/        # Milestone 3 - Multi-provider research
+│   ├── qa-tester/               # Milestone 3 - QA & test automation
+│   ├── api-coder/               # Milestone 3 - Backend API development
+│   ├── ui-agent/                # Milestone 3 - Frontend UI development
+│   ├── project-manager/         # Milestone 4 - Project lifecycle + Dapr Workflow
+│   ├── claude-mqtt-bridge/      # Milestone 4 - Claude Code hooks → MQTT
 │   ├── homelab-monitor/         # Milestone 5
 │   ├── infra-manager/           # Milestone 5
 │   └── cost-tracker/            # Milestone 5
+├── docs/
+│   └── CLAUDE_PROGRESS_UI.md    # Guide for building Claude progress UIs
 ├── dapr/
 │   └── components/
 │       ├── statestore-redis.yaml

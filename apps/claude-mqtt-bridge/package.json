@@ -1,0 +1,22 @@
+{
+  "name": "@mesh-six/claude-mqtt-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "claude-mqtt-bridge": "./dist/index.js"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun --minify",
+    "start": "bun run dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.4",
+    "typescript": "^5.7.3"
+  }
+}

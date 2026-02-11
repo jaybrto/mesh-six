@@ -1,9 +1,11 @@
 import { Hono } from "hono";
-import { DaprClient, HttpMethod } from "@dapr/dapr";
+import { DaprClient, HttpMethod, WorkflowRuntime, DaprWorkflowClient } from "@dapr/dapr";
 import { generateObject } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import { readFile } from "node:fs/promises";
+import * as mqtt from "mqtt";
 import {
   AgentRegistry,
   AgentMemory,
@@ -16,6 +18,21 @@ import {
   type DaprPubSubMessage,
   type DaprSubscription,
 } from "@mesh-six/core";
+import {
+  createWorkflowRuntime,
+  createWorkflowClient,
+  startProjectWorkflow,
+  advanceProject,
+  getProjectWorkflowStatus,
+  createProjectActivity,
+  evaluateGateActivity,
+  transitionStateActivity,
+  addCommentActivity,
+  consultArchitectActivity,
+  requestResearchActivity,
+  type WorkflowInput,
+  type WorkflowActivityImplementations,
+} from "./workflow.js";
 
 // --- Configuration ---
 const AGENT_ID = process.env.AGENT_ID || "project-manager";
@@ -35,6 +52,10 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 const GITEA_URL = process.env.GITEA_URL || "";
 const GITEA_TOKEN = process.env.GITEA_TOKEN || "";
 
+// MQTT Configuration
+const MQTT_URL = process.env.MQTT_URL || "mqtt://rabbitmq.rabbitmq:1883";
+const MQTT_ENABLED = process.env.MQTT_ENABLED !== "false";
+
 // --- LLM Provider ---
 const llm = createOpenAI({
   baseURL: LITELLM_BASE_URL,
@@ -52,6 +73,25 @@ const registry = new AgentRegistry(daprClient);
 
 // --- Memory Layer ---
 let memory: AgentMemory | null = null;
+
+// --- MQTT Client ---
+let mqttClient: mqtt.MqttClient | null = null;
+
+// --- Workflow Runtime & Client ---
+let workflowRuntime: WorkflowRuntime | null = null;
+let workflowClient: DaprWorkflowClient | null = null;
+
+// --- Workflow Instance Tracking ---
+// Maps project UUID to workflow instance ID
+const projectWorkflowMap = new Map<string, string>();
+
+// --- Code Pod Progress Event Schema ---
+interface CodePodProgress {
+  jobId: string;
+  status: 'started' | 'in_progress' | 'completed' | 'failed';
+  details: string;
+  timestamp: string;
+}
 
 // --- Project State Machine ---
 export const ProjectState = z.enum([
@@ -100,6 +140,59 @@ export const ReviewResultSchema = z.object({
   reasoning: z.string(),
 });
 export type ReviewResult = z.infer<typeof ReviewResultSchema>;
+
+// --- Smoke Test Schemas ---
+export interface EndpointTest {
+  url: string;
+  method: 'GET' | 'POST';
+  expectedStatus: number;
+}
+
+export interface SmokeTestResult {
+  endpoint: string;
+  method: string;
+  statusCode: number;
+  responseTimeMs: number;
+  success: boolean;
+  error?: string;
+}
+
+// --- Playwright Test Result Schema ---
+export const PlaywrightTestSchema = z.object({
+  status: z.enum(["passed", "failed", "skipped", "timedOut"]),
+  errors: z.array(z.object({
+    message: z.string(),
+    stack: z.string().optional(),
+  })).optional(),
+});
+
+export const PlaywrightSpecSchema = z.object({
+  title: z.string(),
+  ok: z.boolean(),
+  tests: z.array(PlaywrightTestSchema),
+});
+
+export const PlaywrightSuiteSchema = z.object({
+  title: z.string(),
+  specs: z.array(PlaywrightSpecSchema),
+});
+
+export const PlaywrightResultSchema = z.object({
+  config: z.object({
+    projects: z.array(z.object({
+      name: z.string(),
+    })),
+  }),
+  suites: z.array(PlaywrightSuiteSchema),
+  stats: z.object({
+    expected: z.number(),
+    unexpected: z.number(),
+    flaky: z.number(),
+    skipped: z.number(),
+  }),
+});
+
+export type PlaywrightResult = z.infer<typeof PlaywrightResultSchema>;
 
 // --- Project Task Request Schema ---
 export const ProjectTaskSchema = z.object({
@@ -311,7 +404,8 @@ async function createGiteaIssue(
   owner: string,
   repo: string,
   title: string,
-  body: string
+  body: string,
+  labels?: string[]
 ): Promise<{ issueNumber: number; url: string } | null> {
   if (!GITEA_URL || !GITEA_TOKEN) {
     console.warn(`[${AGENT_ID}] Gitea client not configured`);
@@ -328,7 +422,7 @@ async function createGiteaIssue(
       body: JSON.stringify({
         title,
         body,
-        labels: ["mesh-six", "automated"],
+        labels: labels || ["mesh-six", "automated"],
       }),
     });
 
@@ -345,6 +439,216 @@ async function createGiteaIssue(
     console.error(`[${AGENT_ID}] Failed to create Gitea issue:`, error);
     return null;
   }
+}
+
+// --- Playwright Test Result Parsing ---
+
+/**
+ * Parse Playwright test results from JSON file
+ */
+async function parsePlaywrightResults(resultsPath: string): Promise<PlaywrightResult | null> {
+  try {
+    const fileContent = await readFile(resultsPath, "utf-8");
+    const jsonData = JSON.parse(fileContent);
+    const result = PlaywrightResultSchema.parse(jsonData);
+    return result;
+  } catch (error) {
+    console.warn(`[${AGENT_ID}] Failed to parse Playwright results from ${resultsPath}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Extract test failures from Playwright results
+ */
+function extractTestFailures(results: PlaywrightResult): string[] {
+  const failures: string[] = [];
+
+  for (const suite of results.suites) {
+    for (const spec of suite.specs) {
+      for (const test of spec.tests) {
+        if (test.status === "failed" || test.status === "timedOut") {
+          const suiteTitle = suite.title || "Unknown Suite";
+          const specTitle = spec.title || "Unknown Spec";
+          const errorMessage = test.errors?.[0]?.message || "No error message available";
+
+          failures.push(`${suiteTitle} > ${specTitle}: ${errorMessage}`);
+        }
+      }
+    }
+  }
+
+  return failures;
+}
+
+/**
+ * Create bug issue for test failures
+ */
+async function createBugIssueForTestFailure(
+  project: Project,
+  failures: string[],
+  testStats: PlaywrightResult["stats"]
+): Promise<void> {
+  const title = `[Bug] Test failures in ${project.title}`;
+  const body = `## Test Failures Detected
+
+**Project:** ${project.title}
+**State:** ${project.state}
+
+### Test Statistics
+- ✅ Passed: ${testStats.expected}
+- ❌ Failed: ${testStats.unexpected}
+- ⚠️ Flaky: ${testStats.flaky}
+- ⏭️ Skipped: ${testStats.skipped}
+
+### Failed Tests
+${failures.map((f, i) => `${i + 1}. ${f}`).join("\n")}
+
+---
+
+*Auto-generated by Project Manager Agent*
+*Related to project: ${project.id}*`;
+
+  let issueResult: { issueNumber: number; url: string } | null = null;
+
+  if (project.platform === "github") {
+    if (!github) {
+      console.warn(`[${AGENT_ID}] GitHub client not configured, cannot create bug issue`);
+      return;
+    }
+
+    try {
+      const response = await github.issues.create({
+        owner: project.repoOwner,
+        repo: project.repoName,
+        title,
+        body,
+        labels: ["bug", "test-failure", "mesh-six", "automated"],
+      });
+      issueResult = {
+        issueNumber: response.data.number,
+        url: response.data.html_url,
+      };
+    } catch (error) {
+      console.error(`[${AGENT_ID}] Failed to create GitHub bug issue:`, error);
+      return;
+    }
+  } else if (project.platform === "gitea") {
+    issueResult = await createGiteaIssue(
+      project.repoOwner,
+      project.repoName,
+      title,
+      body,
+      ["bug", "test-failure", "mesh-six", "automated"]
+    );
+  }
+
+  if (issueResult) {
+    console.log(`[${AGENT_ID}] Created bug issue #${issueResult.issueNumber}: ${issueResult.url}`);
+  }
+}
+
+// --- Smoke Testing Functions ---
+
+/**
+ * Run smoke tests against a deployed service
+ * @param baseUrl Base URL of the deployed service
+ * @param endpoints Optional array of custom endpoint tests
+ * @returns Array of smoke test results
+ */
+async function runSmokeTests(
+  baseUrl: string,
+  endpoints?: EndpointTest[]
+): Promise<SmokeTestResult[]> {
+  // Default endpoints: health and readiness checks
+  const defaultEndpoints: EndpointTest[] = [
+    { url: `${baseUrl}/healthz`, method: 'GET', expectedStatus: 200 },
+    { url: `${baseUrl}/readyz`, method: 'GET', expectedStatus: 200 },
+  ];
+
+  const testsToRun = endpoints && endpoints.length > 0 ? endpoints : defaultEndpoints;
+  const results: SmokeTestResult[] = [];
+
+  console.log(`[${AGENT_ID}] Running smoke tests against ${baseUrl}`);
+
+  for (const test of testsToRun) {
+    const startTime = Date.now();
+    let result: SmokeTestResult;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+
+      const response = await fetch(test.url, {
+        method: test.method,
+        signal: controller.signal,
+        headers: test.method === 'POST' ? { 'Content-Type': 'application/json' } : {},
+      });
+
+      clearTimeout(timeoutId);
+      const responseTimeMs = Date.now() - startTime;
+
+      result = {
+        endpoint: test.url,
+        method: test.method,
+        statusCode: response.status,
+        responseTimeMs,
+        success: response.status === test.expectedStatus,
+        error: response.status !== test.expectedStatus
+          ? `Expected ${test.expectedStatus}, got ${response.status}`
+          : undefined,
+      };
+    } catch (error) {
+      const responseTimeMs = Date.now() - startTime;
+      result = {
+        endpoint: test.url,
+        method: test.method,
+        statusCode: 0,
+        responseTimeMs,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    results.push(result);
+    console.log(`[${AGENT_ID}] Smoke test: ${test.method} ${test.url} - ${result.success ? 'PASS' : 'FAIL'}`);
+  }
+
+  return results;
+}
+
+/**
+ * Format smoke test results into a markdown report
+ * @param results Array of smoke test results
+ * @returns Markdown formatted report
+ */
+function formatSmokeTestReport(results: SmokeTestResult[]): string {
+  const passed = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+  const total = results.length;
+
+  let report = `## Smoke Test Results\n\n`;
+  report += `**Summary:** ${passed}/${total} passed, ${failed}/${total} failed\n\n`;
+  report += `| Endpoint | Method | Status | Response Time | Result |\n`;
+  report += `|----------|--------|--------|---------------|--------|\n`;
+
+  for (const result of results) {
+    const statusEmoji = result.success ? '✅' : '❌';
+    const endpoint = result.endpoint.length > 50
+      ? '...' + result.endpoint.substring(result.endpoint.length - 47)
+      : result.endpoint;
+
+    report += `| ${endpoint} | ${result.method} | ${result.statusCode || 'N/A'} | ${result.responseTimeMs}ms | ${statusEmoji} |\n`;
+  }
+
+  if (failed > 0) {
+    report += `\n### Failures\n\n`;
+    for (const result of results.filter(r => !r.success)) {
+      report += `- **${result.method} ${result.endpoint}**: ${result.error || 'Unknown error'}\n`;
+    }
+  }
+
+  return report;
 }
 
 // --- State Transition Logic ---
@@ -402,6 +706,82 @@ async function evaluateReviewGate(
   gateType: "plan" | "qa" | "deployment",
   context: Record<string, unknown>
 ): Promise<ReviewResult> {
+  // For QA gate, check Playwright test results first if provided
+  if (gateType === "qa" && context.testResultsPath && typeof context.testResultsPath === "string") {
+    const playwrightResults = await parsePlaywrightResults(context.testResultsPath);
+
+    if (playwrightResults) {
+      const failures = extractTestFailures(playwrightResults);
+
+      // Auto-reject if tests failed
+      if (playwrightResults.stats.unexpected > 0 || failures.length > 0) {
+        // Create bug issue for failures
+        await createBugIssueForTestFailure(project, failures, playwrightResults.stats);
+
+        return {
+          approved: false,
+          concerns: [
+            `${playwrightResults.stats.unexpected} test(s) failed`,
+            ...failures.slice(0, 5), // Limit to first 5 failures in concerns
+          ],
+          suggestions: [
+            "Fix failing tests before proceeding to deployment",
+            "Review test failure details in the generated bug issue",
+            failures.length > 5 ? `${failures.length - 5} more failure(s) not shown` : "",
+          ].filter(Boolean),
+          confidence: 1.0,
+          reasoning: `Playwright tests detected ${playwrightResults.stats.unexpected} failure(s). Tests must pass before deployment. A bug issue has been created with failure details.`,
+        };
+      }
+
+      // Include test stats in context for LLM evaluation
+      context.playwrightStats = playwrightResults.stats;
+      context.testsPassed = true;
+    }
+  }
+
+  // For deployment gate, run smoke tests if serviceUrl is provided
+  if (gateType === "deployment" && context.serviceUrl && typeof context.serviceUrl === "string") {
+    const customEndpoints = context.endpoints as EndpointTest[] | undefined;
+    const smokeTestResults = await runSmokeTests(context.serviceUrl, customEndpoints);
+
+    // Check for critical endpoint failures (healthz, readyz)
+    const criticalFailures = smokeTestResults.filter(
+      r => !r.success && (r.endpoint.includes('/healthz') || r.endpoint.includes('/readyz'))
+    );
+
+    if (criticalFailures.length > 0) {
+      const report = formatSmokeTestReport(smokeTestResults);
+
+      return {
+        approved: false,
+        concerns: criticalFailures.map(f => `Critical endpoint failed: ${f.method} ${f.endpoint} - ${f.error}`),
+        suggestions: [
+          "Verify the service is running and accessible",
+          "Check deployment logs for startup errors",
+          "Ensure health check endpoints are implemented correctly",
+        ],
+        confidence: 1.0,
+        reasoning: `Smoke tests failed for critical health endpoints. Service is not ready for validation.\n\n${report}`,
+      };
+    }
+
+    // Include smoke test results in context for LLM evaluation
+    context.smokeTestResults = smokeTestResults;
+    context.smokeTestReport = formatSmokeTestReport(smokeTestResults);
+
+    const allPassed = smokeTestResults.every(r => r.success);
+    const avgResponseTime = smokeTestResults.reduce((sum, r) => sum + r.responseTimeMs, 0) / smokeTestResults.length;
+
+    context.smokeTestSummary = {
+      allPassed,
+      totalTests: smokeTestResults.length,
+      passed: smokeTestResults.filter(r => r.success).length,
+      failed: smokeTestResults.filter(r => !r.success).length,
+      avgResponseTime: Math.round(avgResponseTime),
+    };
+  }
+
   const prompts: Record<string, string> = {
     plan: `Evaluate this implementation plan for project "${project.title}":
 
@@ -452,11 +832,14 @@ app.get("/healthz", (c) =>
     agent: AGENT_ID,
     capabilities: REGISTRATION.capabilities.map((cap) => cap.name),
     memoryEnabled: MEMORY_ENABLED && memory !== null,
+    mqttEnabled: MQTT_ENABLED && mqttClient?.connected === true,
+    workflowEnabled: workflowRuntime !== null && workflowClient !== null,
     platforms: {
       github: !!GITHUB_TOKEN,
       gitea: !!GITEA_URL && !!GITEA_TOKEN,
     },
     activeProjects: projects.size,
+    trackedWorkflows: projectWorkflowMap.size,
   })
 );
 
@@ -482,66 +865,37 @@ app.get("/dapr/subscribe", (c): Response => {
 
 // --- Project Management Endpoints ---
 
-// Create a new project
+// Create a new project (using Dapr Workflow)
 app.post("/projects", async (c) => {
   try {
+    if (!workflowClient) {
+      return c.json({ success: false, error: "Workflow client not initialized" }, 500);
+    }
+
     const body = await c.req.json();
     const { title, description, platform, repoOwner, repoName, context } = body;
 
-    // Consult architect for initial guidance
-    const architectGuidance = await consultArchitect(
-      `New project request: "${title}". Description: ${description}. What technical approach do you recommend?`
-    );
-
-    // Create issue on platform
-    const issueBody = `## Project: ${title}
-
-${description}
-
----
-
-### Architectural Guidance
-\`\`\`json
-${JSON.stringify(architectGuidance, null, 2)}
-\`\`\`
-
----
-
-*Managed by Project Manager Agent (mesh-six)*`;
-
-    let issueResult: { issueNumber: number; url: string } | null = null;
-
-    if (platform === "github") {
-      issueResult = await createGitHubIssue(repoOwner, repoName, title, issueBody);
-    } else if (platform === "gitea") {
-      issueResult = await createGiteaIssue(repoOwner, repoName, title, issueBody);
-    }
-
-    // Create project record
-    const now = new Date().toISOString();
-    const project: Project = {
-      id: crypto.randomUUID(),
+    const workflowInput: WorkflowInput = {
       title,
       description,
-      state: "CREATE",
-      platform,
+      platform: platform || "github",
       repoOwner,
       repoName,
-      issueNumber: issueResult?.issueNumber,
-      createdAt: now,
-      updatedAt: now,
-      stateHistory: [{ state: "CREATE", timestamp: now, reason: "Project created" }],
-      metadata: {
-        architectGuidance,
-        issueUrl: issueResult?.url,
-        ...context,
-      },
+      context,
     };
 
-    projects.set(project.id, project);
+    // Generate a project ID that will be used as workflow instance ID
+    const projectId = crypto.randomUUID();
 
-    // Immediately transition to PLANNING
-    await transitionState(project, "PLANNING", "Initial planning phase started");
+    // Start workflow instance with project ID as instance ID
+    const workflowInstanceId = await startProjectWorkflow(
+      workflowClient,
+      workflowInput,
+      projectId
+    );
+
+    // Track project-to-workflow mapping
+    projectWorkflowMap.set(projectId, workflowInstanceId);
 
     // Store in memory
     if (memory) {
@@ -549,22 +903,27 @@ ${JSON.stringify(architectGuidance, null, 2)}
         await memory.store(
           [
             { role: "user", content: `Create project: ${title}` },
-            { role: "assistant", content: `Created project ${project.id} on ${platform}/${repoOwner}/${repoName}` },
+            { role: "assistant", content: `Created project ${projectId} on ${platform}/${repoOwner}/${repoName}` },
           ],
           "project-manager",
-          { projectId: project.id, action: "create" }
+          { projectId, action: "create", workflowInstanceId }
         );
       } catch (error) {
         console.warn(`[${AGENT_ID}] Failed to store in memory:`, error);
       }
     }
 
-    console.log(`[${AGENT_ID}] Created project: ${project.id} - ${title}`);
+    console.log(`[${AGENT_ID}] Started workflow for project: ${projectId} - ${title}`);
+
+    // Get initial workflow status
+    const status = await getProjectWorkflowStatus(workflowClient, workflowInstanceId);
 
     return c.json({
       success: true,
-      project,
-      issueUrl: issueResult?.url,
+      projectId,
+      workflowInstanceId,
+      workflowStatus: status,
+      message: "Project workflow started. Project is now in PLANNING state.",
     });
   } catch (error) {
     console.error(`[${AGENT_ID}] Failed to create project:`, error);
@@ -572,16 +931,31 @@ ${JSON.stringify(architectGuidance, null, 2)}
   }
 });
 
-// Get project status
-app.get("/projects/:id", (c) => {
-  const projectId = c.req.param("id");
-  const project = projects.get(projectId);
+// Get project status (from workflow)
+app.get("/projects/:id", async (c) => {
+  try {
+    if (!workflowClient) {
+      return c.json({ error: "Workflow client not initialized" }, 500);
+    }
 
-  if (!project) {
-    return c.json({ error: "Project not found" }, 404);
+    const projectId = c.req.param("id");
+    const workflowInstanceId = projectWorkflowMap.get(projectId) || projectId;
+
+    const status = await getProjectWorkflowStatus(workflowClient, workflowInstanceId);
+
+    // Also check in-memory map for backwards compatibility
+    const legacyProject = projects.get(projectId);
+
+    return c.json({
+      projectId,
+      workflowInstanceId,
+      workflowStatus: status,
+      legacyProject: legacyProject || null,
+    });
+  } catch (error) {
+    console.error(`[${AGENT_ID}] Failed to get project status:`, error);
+    return c.json({ error: String(error) }, 500);
   }
-
-  return c.json({ project });
 });
 
 // List all projects
@@ -599,71 +973,40 @@ app.get("/projects", (c) => {
   });
 });
 
-// Advance project state
+// Advance project state (using workflow events)
 app.post("/projects/:id/advance", async (c) => {
   try {
-    const projectId = c.req.param("id");
-    const project = projects.get(projectId);
-
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
+    if (!workflowClient) {
+      return c.json({ error: "Workflow client not initialized" }, 500);
     }
+
+    const projectId = c.req.param("id");
+    const workflowInstanceId = projectWorkflowMap.get(projectId) || projectId;
 
     const body = await c.req.json();
-    const { targetState, context, force } = body;
+    const { targetState, context, reason } = body;
 
-    // Validate transition
-    if (!force && !canTransition(project.state, targetState)) {
-      return c.json({
-        error: `Invalid transition: ${project.state} → ${targetState}`,
-        validTransitions: getValidTransitions(project.state),
-      }, 400);
-    }
+    // Raise advance event to workflow
+    await advanceProject(
+      workflowClient,
+      workflowInstanceId,
+      targetState,
+      context || {},
+      reason
+    );
 
-    // Perform review gate if applicable
-    if (["REVIEW", "DEPLOY", "ACCEPTED"].includes(targetState)) {
-      const gateType = targetState === "REVIEW" ? "plan" :
-                       targetState === "DEPLOY" ? "qa" : "deployment";
+    console.log(`[${AGENT_ID}] Raised advance event for project ${projectId} → ${targetState}`);
 
-      const review = await evaluateReviewGate(project, gateType as "plan" | "qa" | "deployment", context || {});
-
-      if (!review.approved && !force) {
-        // Add feedback to issue
-        if (project.issueNumber) {
-          const feedbackComment = `⚠️ **Review Gate Failed**: ${gateType}
-
-**Concerns:**
-${review.concerns.map((c) => `- ${c}`).join("\n")}
-
-**Suggestions:**
-${review.suggestions.map((s) => `- ${s}`).join("\n")}
-
-**Reasoning:** ${review.reasoning}
-
-*Confidence: ${(review.confidence * 100).toFixed(0)}%*`;
-
-          if (project.platform === "github") {
-            await addGitHubComment(project.repoOwner, project.repoName, project.issueNumber, feedbackComment);
-          }
-        }
-
-        return c.json({
-          success: false,
-          review,
-          message: "Review gate not passed. Address concerns and retry.",
-        });
-      }
-    }
-
-    // Perform transition
-    const reason = body.reason || `Advanced to ${targetState}`;
-    await transitionState(project, targetState, reason);
-
-    console.log(`[${AGENT_ID}] Project ${projectId} transitioned to ${targetState}`);
+    // Get updated status
+    const status = await getProjectWorkflowStatus(workflowClient, workflowInstanceId);
 
     return c.json({
       success: true,
-      project,
+      projectId,
+      workflowInstanceId,
+      targetState,
+      workflowStatus: status,
+      message: `Advance signal sent to workflow. Target state: ${targetState}`,
     });
   } catch (error) {
     console.error(`[${AGENT_ID}] Failed to advance project:`, error);
@@ -840,6 +1183,191 @@ async function start(): Promise<void> {
     gitea: !!GITEA_URL && !!GITEA_TOKEN,
   });
 
+  // Initialize Workflow Runtime and Client
+  try {
+    console.log(`[${AGENT_ID}] Initializing Dapr Workflow runtime...`);
+
+    // Create activity implementations that wrap existing functions
+    const activityImplementations: WorkflowActivityImplementations = {
+      createProject: async (ctx, input) => {
+        const { title, description, platform, repoOwner, repoName, architectGuidance, context } = input;
+
+        // Create issue on platform
+        const issueBody = `## Project: ${title}
+
+${description}
+
+---
+
+### Architectural Guidance
+\`\`\`json
+${JSON.stringify(architectGuidance, null, 2)}
+\`\`\`
+
+---
+
+*Managed by Project Manager Agent (mesh-six)*`;
+
+        let issueResult: { issueNumber: number; url: string } | null = null;
+
+        if (platform === "github") {
+          issueResult = await createGitHubIssue(repoOwner, repoName, title, issueBody);
+        } else if (platform === "gitea") {
+          issueResult = await createGiteaIssue(repoOwner, repoName, title, issueBody);
+        }
+
+        // Create project record
+        const now = new Date().toISOString();
+        const project: Project = {
+          id: crypto.randomUUID(),
+          title,
+          description,
+          state: "CREATE",
+          platform,
+          repoOwner,
+          repoName,
+          issueNumber: issueResult?.issueNumber,
+          createdAt: now,
+          updatedAt: now,
+          stateHistory: [{ state: "CREATE", timestamp: now, reason: "Project created" }],
+          metadata: {
+            architectGuidance,
+            issueUrl: issueResult?.url,
+            ...context,
+          },
+        };
+
+        // Store in legacy map for backwards compatibility
+        projects.set(project.id, project);
+
+        console.log(`[Activity] Created project: ${project.id}`);
+        return project;
+      },
+
+      evaluateGate: async (ctx, input) => {
+        return await evaluateReviewGate(input.project, input.gateType, input.context);
+      },
+
+      transitionState: async (ctx, input) => {
+        const updatedProject = await transitionState(input.project, input.newState, input.reason);
+        // Update legacy map
+        projects.set(updatedProject.id, updatedProject);
+        return updatedProject;
+      },
+
+      addComment: async (ctx, input) => {
+        if (input.platform === "github") {
+          return await addGitHubComment(input.repoOwner, input.repoName, input.issueNumber, input.body);
+        }
+        // TODO: Add Gitea comment support
+        return false;
+      },
+
+      consultArchitect: async (ctx, input) => {
+        return await consultArchitect(input.question);
+      },
+
+      requestResearch: async (ctx, input) => {
+        return await requestResearch(input.query, input.type);
+      },
+    };
+
+    // Create and start workflow runtime
+    workflowRuntime = createWorkflowRuntime(activityImplementations);
+    await workflowRuntime.start();
+    console.log(`[${AGENT_ID}] Workflow runtime started`);
+
+    // Create workflow client
+    workflowClient = createWorkflowClient();
+    console.log(`[${AGENT_ID}] Workflow client initialized`);
+  } catch (error) {
+    console.error(`[${AGENT_ID}] Failed to initialize workflow runtime:`, error);
+    // Continue without workflows - fall back to in-memory state
+    workflowRuntime = null;
+    workflowClient = null;
+  }
+
+  // Initialize MQTT client for Claude Code pod progress events
+  if (MQTT_ENABLED) {
+    try {
+      console.log(`[${AGENT_ID}] Connecting to MQTT broker at ${MQTT_URL}`);
+      mqttClient = mqtt.connect(MQTT_URL, {
+        clientId: `${AGENT_ID}-${Date.now()}`,
+        clean: true,
+        reconnectPeriod: 5000,
+      });
+
+      mqttClient.on("connect", () => {
+        console.log(`[${AGENT_ID}] MQTT connected, subscribing to agent/code/job/#`);
+        mqttClient?.subscribe("agent/code/job/#", (err) => {
+          if (err) {
+            console.error(`[${AGENT_ID}] MQTT subscription failed:`, err);
+          } else {
+            console.log(`[${AGENT_ID}] MQTT subscribed to Claude Code pod progress events`);
+          }
+        });
+      });
+
+      mqttClient.on("message", (topic, message) => {
+        try {
+          const progress: CodePodProgress = JSON.parse(message.toString());
+          console.log(`[${AGENT_ID}] Code pod progress: jobId=${progress.jobId} status=${progress.status}`);
+
+          // Find project by jobId in metadata
+          for (const project of projects.values()) {
+            if (project.metadata?.jobId === progress.jobId) {
+              console.log(`[${AGENT_ID}] Matched progress to project ${project.id} - ${project.title}`);
+
+              // Update project metadata with latest progress
+              if (!project.metadata) {
+                project.metadata = {};
+              }
+              project.metadata.lastCodePodProgress = progress;
+              project.updatedAt = new Date().toISOString();
+              projects.set(project.id, project);
+
+              // Add comment to issue if available
+              if (project.issueNumber && progress.status === "completed") {
+                const comment = `✅ **Claude Code Pod Completed**\n\nJob ID: ${progress.jobId}\n${progress.details}`;
+                if (project.platform === "github") {
+                  addGitHubComment(project.repoOwner, project.repoName, project.issueNumber, comment)
+                    .catch(err => console.warn(`[${AGENT_ID}] Failed to add GitHub comment:`, err));
+                }
+              } else if (project.issueNumber && progress.status === "failed") {
+                const comment = `❌ **Claude Code Pod Failed**\n\nJob ID: ${progress.jobId}\n${progress.details}`;
+                if (project.platform === "github") {
+                  addGitHubComment(project.repoOwner, project.repoName, project.issueNumber, comment)
+                    .catch(err => console.warn(`[${AGENT_ID}] Failed to add GitHub comment:`, err));
+                }
+              }
+
+              break;
+            }
+          }
+        } catch (error) {
+          console.error(`[${AGENT_ID}] Failed to process MQTT message:`, error);
+        }
+      });
+
+      mqttClient.on("error", (error) => {
+        console.error(`[${AGENT_ID}] MQTT error:`, error);
+      });
+
+      mqttClient.on("offline", () => {
+        console.warn(`[${AGENT_ID}] MQTT client offline, will attempt reconnect`);
+      });
+
+      mqttClient.on("reconnect", () => {
+        console.log(`[${AGENT_ID}] MQTT reconnecting...`);
+      });
+    } catch (error) {
+      console.warn(`[${AGENT_ID}] MQTT initialization failed (continuing without MQTT):`, error);
+      mqttClient = null;
+    }
+  } else {
+    console.log(`[${AGENT_ID}] MQTT disabled via MQTT_ENABLED=false`);
+  }
+
   // Start heartbeat
   heartbeatInterval = setInterval(async () => {
     try {
@@ -861,6 +1389,28 @@ async function shutdown(): Promise<void> {
 
   if (heartbeatInterval) {
     clearInterval(heartbeatInterval);
+  }
+
+  // Stop workflow runtime
+  if (workflowRuntime) {
+    try {
+      console.log(`[${AGENT_ID}] Stopping workflow runtime`);
+      await workflowRuntime.stop();
+      console.log(`[${AGENT_ID}] Workflow runtime stopped`);
+    } catch (error) {
+      console.error(`[${AGENT_ID}] Failed to stop workflow runtime:`, error);
+    }
+  }
+
+  // Disconnect MQTT client
+  if (mqttClient) {
+    try {
+      console.log(`[${AGENT_ID}] Disconnecting MQTT client`);
+      await mqttClient.endAsync();
+      console.log(`[${AGENT_ID}] MQTT client disconnected`);
+    } catch (error) {
+      console.error(`[${AGENT_ID}] Failed to disconnect MQTT:`, error);
+    }
   }
 
   try {

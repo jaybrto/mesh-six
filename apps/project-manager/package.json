@@ -1,6 +1,6 @@
 {
   "name": "@mesh-six/project-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
@@ -16,6 +16,7 @@
     "@octokit/rest": "^21.0.0",
     "ai": "^4.1.52",
     "hono": "^4.7.4",
+    "mqtt": "^5.10.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {

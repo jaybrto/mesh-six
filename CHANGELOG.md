@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Claude MQTT Bridge for Real-time Progress Monitoring
+- **@mesh-six/claude-mqtt-bridge@0.1.0**: Bun script for Claude Code hooks → MQTT
+  - Receives Claude hook events via stdin (JSON)
+  - Enriches with git branch, worktree path, model, job_id
+  - Publishes to MQTT topics: `claude/progress/{session_id}/{event_type}`
+  - Supports all major hook events: SessionStart, PreToolUse, PostToolUse, SubagentStart/Stop, SessionEnd
+  - Graceful fallback to file logging if MQTT unavailable
+  - Fast startup for use as hook command (~0.34 MB bundle)
+- **docs/CLAUDE_PROGRESS_UI.md**: Comprehensive guide for building progress UIs
+  - MQTT topic structure and event schemas
+  - React + Zustand example implementation
+  - CLI monitoring script
+  - Integration with mesh-six Project Manager
+- **.claude/settings.local.json**: Hook configuration for mesh-six project
+  - All relevant hooks configured to call MQTT bridge
+  - Async mode for non-blocking progress reporting
+
+### Added - Milestone 4: Project Manager Enhancements
+
+#### Database
+- **migrations/002_repo_registry.sql**: Repository registry table for tracking service repos
+  - Tracks service_name, platform (github/gitea), repo_url, default_branch
+  - CI/CD configuration: cicd_type, trigger_method, board_id
+  - JSONB metadata for custom settings
+  - Indexes for platform, trigger_method, board_id queries
+
+#### MQTT Integration
+- **@mesh-six/project-manager@0.2.0**: Real-time progress monitoring via MQTT
+  - Subscribe to Claude Code pod progress events (`agent/code/job/#`)
+  - Event schema: `{ jobId, status, details, timestamp }`
+  - Auto-matches progress to tracked projects via metadata.jobId
+  - Adds GitHub comments on job completion/failure
+  - Configurable via `MQTT_URL` and `MQTT_ENABLED` env vars
+  - Graceful connection handling (continues if MQTT unavailable)
+
+#### QA Gate Enhancement
+- **@mesh-six/project-manager**: Playwright test result parsing
+  - New `parsePlaywrightResults()` function for JSON reporter output
+  - Auto-rejects QA gate if tests fail with specific failure details
+  - `extractTestFailures()` extracts suite/spec/error info
+  - Auto-creates bug issues on GitHub/Gitea with test failure details
+  - Labels: `bug`, `test-failure`, `mesh-six`, `automated`
+
+#### VALIDATE Gate Enhancement
+- **@mesh-six/project-manager**: Endpoint smoke testing
+  - New `runSmokeTests()` function with 5-second timeout per endpoint
+  - Default tests: `/healthz`, `/readyz`
+  - Custom endpoints via `context.endpoints`
+  - Auto-rejects if critical health endpoints fail
+  - `formatSmokeTestReport()` generates markdown report
+  - Includes response times and failure details
+
+### Changed - Dapr Workflow Migration
+- **@mesh-six/project-manager@0.2.0**: Migrated to Dapr Workflow for durable state management
+  - State machine now uses Dapr Workflow for persistence across pod restarts
+  - Projects survive failures with automatic state recovery
+  - Event-driven state transitions via external signals (`advance` event)
+  - Workflow activities wrap existing business logic (createProject, evaluateGate, transitionState, etc.)
+  - Backwards compatible: legacy in-memory map still maintained
+  - New API responses include workflow instance ID and runtime status
+  - Review gates (plan/qa/deployment) integrated into workflow
+  - New file: `apps/project-manager/src/workflow.ts`
+  - Complete documentation in `WORKFLOW_MIGRATION.md`
+
 ### Added - Deployer Agents
 - **@mesh-six/argocd-deployer@0.1.0**: GitOps deployment agent via ArgoCD
   - Capabilities: `deploy-service` (0.9), `rollback-service` (0.9), `sync-gitops` (1.0)
