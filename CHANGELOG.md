@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added - Milestone 3: Specialist Agents (in progress)
+### Added - Milestone 3 & 4: Specialist Agents + Project Manager
 - **@mesh-six/architect-agent@0.1.0**: Architectural consultation agent
   - Capabilities: `tech-consultation`, `architecture-review`
   - Structured output schema for recommendations (tech stack, deployment strategy, considerations)
@@ -24,7 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tools: web search, documentation search, repository analysis, past research lookup
   - Structured output schema for research results with key findings, recommendations, sources
   - Memory integration for storing research findings
-- Kubernetes manifests for architect-agent and researcher-agent deployment
+- **@mesh-six/project-manager@0.1.0**: Project lifecycle management agent
+  - Capabilities: `project-management`, `task-orchestration`
+  - State machine: CREATE → PLANNING → REVIEW → IN_PROGRESS → QA → DEPLOY → VALIDATE → ACCEPTED
+  - GitHub integration via @octokit/rest (issue creation, comments, updates)
+  - Gitea integration via REST API
+  - Agent-to-agent consultation: invokes Architect and Researcher agents
+  - LLM-powered review gates at state transitions
+  - Memory integration for project history
+  - Project CRUD endpoints and state advancement API
+- Kubernetes manifests for all new agents
 
 ## [0.2.0] - 2026-02-11 (8327110)
 

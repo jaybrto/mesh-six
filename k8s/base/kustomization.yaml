@@ -10,6 +10,7 @@ resources:
   - simple-agent/
   - architect-agent/
   - researcher-agent/
+  - project-manager/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six
