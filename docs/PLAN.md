@@ -17,9 +17,10 @@
 7. [Milestone 3 — Specialist Agents](#milestone-3--specialist-agents)
 8. [Milestone 4 — Project Manager Agent](#milestone-4--project-manager-agent)
 9. [Milestone 5 — Infrastructure Agents](#milestone-5--infrastructure-agents)
-10. [Cross-Cutting Concerns](#cross-cutting-concerns)
-11. [Repository Structure](#repository-structure)
-12. [Deployment Strategy](#deployment-strategy)
+10. [Event Log — Standalone Module](#event-log--standalone-module)
+11. [Cross-Cutting Concerns](#cross-cutting-concerns)
+12. [Repository Structure](#repository-structure)
+13. [Deployment Strategy](#deployment-strategy)
 
 ---
 
@@ -53,10 +54,10 @@ Mesh Six is a collection of independent microservices deployed to a 6-node k3s c
 │                                                              │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │                 Shared Infrastructure                │    │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │    │
-│  │  │PostgreSQL│  │  Redis   │  │  Mem0 (Python    │  │    │
-│  │  │HA + pgvec│  │  Cluster │  │  container)      │  │    │
-│  │  └──────────┘  └──────────┘  └──────────────────┘  │    │
+│  │  ┌──────────┐  ┌──────────┐                        │    │
+│  │  │PostgreSQL│  │  Redis   │                        │    │
+│  │  │HA + pgvec│  │  Cluster │                        │    │
+│  │  └──────────┘  └──────────┘                        │    │
 │  │  ┌──────────┐  ┌──────────┐                        │    │
 │  │  │  Ollama  │  │ LiteLLM  │  (LLM Gateway)        │    │
 │  │  └──────────┘  └──────────┘                        │    │
@@ -85,7 +86,7 @@ These decisions were made through extensive design discussion and should not be 
 | Agent Communication | Dapr (service invocation + pub/sub) | Language-agnostic, observability built-in, decouples agents from infrastructure. Already deployed in cluster. |
 | Message Broker | RabbitMQ | Primary messaging infra, HA via operator, quorum queues, MQTT plugin for real-time. Replaces NATS for agent comms. |
 | LLM Gateway | Existing Ollama + LiteLLM | Already running. OpenAI-compatible API for Vercel AI SDK. No changes needed. |
-| Memory Layer | Mem0 (containerized Python service) | Proven architecture, pgvector support, REST API. Python is quarantined — never touched by developer. |
+| Memory Layer | Mem0 via `mem0ai` npm package | Direct TypeScript integration. pgvector for vectors, Ollama for embeddings/extraction. No separate container. |
 | Short-term Memory | Redis (via Dapr state store) | Session context, agent working memory. Already running HA. |
 | Long-term Memory | PostgreSQL + pgvector (via Mem0) | Persistent memory, vector similarity search. Already running HA (3-pod). |
 | Agent Discovery | Custom registry in Dapr state store | Lightweight, ~50 lines. Agents self-register with capabilities, health checks, weights. |
@@ -108,7 +109,7 @@ These decisions were made through extensive design discussion and should not be 
 | Dapr Client | `@dapr/dapr` | State, pub/sub, service invocation, bindings |
 | HTTP Server | `Hono` | Lightweight HTTP framework for agent endpoints |
 | Validation | `zod` | Schema validation for structured outputs and messages |
-| Task History | `postgres` (porsager) | Direct PostgreSQL queries for agent scoring |
+| Task History | `pg` | Direct PostgreSQL queries for agent scoring (PgBouncer compatible) |
 
 ### Infrastructure (Already Running)
 
@@ -128,7 +129,6 @@ These decisions were made through extensive design discussion and should not be 
 
 | Service | Milestone | Purpose |
 |---------|-----------|---------|
-| Mem0 (Python container) | 2 | Memory extraction and retrieval service |
 | pgvector extension | 2 | Vector similarity search in PostgreSQL |
 
 ---
@@ -139,12 +139,16 @@ These decisions were made through extensive design discussion and should not be 
 |-------|-------------|------|---------------|-----------|
 | Orchestrator | `orchestrator` | Long-running service | Pub/sub (dispatch), service invocation (query) | 1 |
 | Simple Agent | `simple-agent` | Request-response | Pub/sub (receive tasks) | 1 |
-| Memory Service | `mem0-service` | Infrastructure | HTTP REST API | 2 |
 | ArgoCD Deployer | `argocd-deployer` | Request-response | Pub/sub (receive tasks) | 3 |
 | Kubectl Deployer | `kubectl-deployer` | Request-response | Pub/sub (receive tasks) | 3 |
 | Architect | `architect-agent` | Request-response | Service invocation (consulted by PM/orchestrator) | 3 |
 | Researcher | `researcher-agent` | Request-response | Service invocation (consulted by Architect/PM) | 3 |
+| QA Tester | `qa-tester` | Request-response | Pub/sub (receive tasks) | 3 |
+| API Coder | `api-coder` | Request-response | Pub/sub (receive tasks) | 3 |
+| UI Agent | `ui-agent` | Request-response | Pub/sub (receive tasks) | 3 |
 | Project Manager | `project-manager` | Dapr Workflow (long-running) | Pub/sub + service invocation + workflow | 4 |
+| Claude MQTT Bridge | `claude-mqtt-bridge` | Infrastructure | MQTT publish (Claude hooks) | 4 |
+| Dashboard | `dashboard` | Web UI | MQTT WebSocket (read-only) | 4 |
 | Homelab Monitor | `homelab-monitor` | Request-response | Pub/sub (receive tasks) | 5 |
 | Infra Manager | `infra-manager` | Request-response | Pub/sub (receive tasks) | 5 |
 | Cost Tracker | `cost-tracker` | Request-response | Scheduled + on-demand | 5 |
@@ -764,58 +768,71 @@ CREATE INDEX idx_task_history_created
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-### 2.2 — Deploy Mem0 as Container
+### 2.2 — Mem0 Integration via npm Package
 
-```yaml
-# k8s/base/mem0/deployment.yaml
-# Mem0 open-source server with PostgreSQL + pgvector backend
-# Configuration points to existing PostgreSQL HA cluster
-# REST API exposed internally within the cluster
-# No developer Python interaction required — pure infrastructure
-```
+Instead of deploying a separate Mem0 Python container, memory is integrated directly into agents via the `mem0ai` npm package (v2.2.2). This keeps everything in the Bun/TypeScript ecosystem.
 
-Key Mem0 configuration:
+Key configuration:
 - Vector store: PostgreSQL with pgvector (existing HA cluster)
-- LLM provider: LiteLLM endpoint (for embedding generation)
-- Embedder: OpenAI-compatible via LiteLLM
+- LLM provider: Ollama (`phi4-mini` model) for memory extraction
+- Embedder: Ollama (`mxbai-embed-large` model) for embeddings
+- Collection naming: `mesh_six_{agentId}` per agent
 
 ### 2.3 — Memory Integration in Core Library
 
 ```typescript
 // packages/core/src/memory.ts
 
+import { Memory } from "mem0ai";
+
 export class AgentMemory {
-  constructor(
-    private mem0Url: string,  // e.g., "http://mem0-service.mesh-six:8080"
-    private agentId: string
-  ) {}
+  private memory: Memory;
+  private agentId: string;
+
+  constructor(agentId: string) {
+    this.agentId = agentId;
+    this.memory = new Memory({
+      vector_store: {
+        provider: "pgvector",
+        config: {
+          collection_name: `mesh_six_${agentId}`,
+          host: process.env.PG_PRIMARY_HOST || "localhost",
+          port: Number(process.env.PG_PRIMARY_PORT || 5432),
+          user: process.env.PG_PRIMARY_USER || "postgres",
+          password: process.env.PG_PRIMARY_PASSWORD || "",
+          dbname: process.env.PG_PRIMARY_DB || "mesh_six",
+        },
+      },
+      llm: {
+        provider: "ollama",
+        config: {
+          model: process.env.OLLAMA_MODEL || "phi4-mini",
+          ollama_base_url: process.env.OLLAMA_URL || "http://ollama:11434",
+        },
+      },
+      embedder: {
+        provider: "ollama",
+        config: {
+          model: process.env.OLLAMA_MODEL_EMBED || "mxbai-embed-large",
+          ollama_base_url: process.env.OLLAMA_URL || "http://ollama:11434",
+        },
+      },
+    });
+  }
 
   async remember(query: string, userId?: string): Promise<string[]> {
-    // Search Mem0 for relevant memories
-    const res = await fetch(`${this.mem0Url}/v1/memories/search/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query,
-        agent_id: this.agentId,
-        user_id: userId || "default",
-        limit: 5,
-      }),
+    const results = await this.memory.search(query, {
+      agent_id: this.agentId,
+      user_id: userId || "default",
+      limit: 5,
     });
-    const data = await res.json();
-    return data.results?.map((r: any) => r.memory) || [];
+    return results?.map((r: any) => r.memory) || [];
   }
 
   async store(messages: Array<{ role: string; content: string }>, userId?: string): Promise<void> {
-    // Store conversation in Mem0 — it extracts memories automatically
-    await fetch(`${this.mem0Url}/v1/memories/`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages,
-        agent_id: this.agentId,
-        user_id: userId || "default",
-      }),
+    await this.memory.add(messages, {
+      agent_id: this.agentId,
+      user_id: userId || "default",
     });
   }
 }
@@ -824,6 +841,7 @@ export class AgentMemory {
 ### 2.4 — Milestone 2 Acceptance Criteria
 
 - [x] pgvector extension enabled on PostgreSQL HA cluster (v0.7.0 already installed)
+- [x] Mem0 integrated via mem0ai npm package (no separate Python container needed)
 - [x] AgentMemory class in core library with search/store methods
 - [x] Simple agent stores conversation memories after interactions
 - [x] Simple agent retrieves relevant memories at start of new conversations
@@ -1099,10 +1117,10 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 - [x] Workflow survives pod restarts (Dapr Workflow durability)
 - [x] Progress events visible via MQTT subscription
 - [ ] Full task lifecycle completes: task → plan → code → test → deploy → validate (needs k8s deployment)
-- [ ] PM uses `buildAgentContext()` for each state transition (context stays <5k tokens)
-- [ ] PM runs `transitionClose()` reflection before each state boundary reset
-- [ ] Reflections stored in Mem0 are retrieved by subsequent transitions
-- [ ] Global-scoped reflections accessible by Architect and other agents
+- [x] PM uses `buildAgentContext()` for each state transition (context stays <5k tokens)
+- [x] PM runs `transitionClose()` reflection before each state boundary reset
+- [x] Reflections stored in Mem0 are retrieved by subsequent transitions
+- [x] Global-scoped reflections accessible by Architect and other agents
 
 ### 4.8 — Milestone 4 Implementation Notes
 
@@ -1158,6 +1176,24 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 - Hook configuration: `.claude/settings.local.json`
 - UI guide: `docs/CLAUDE_PROGRESS_UI.md`
 
+**Context Integration (Completed):**
+- `buildAgentContext()` wired into `evaluateReviewGate()` for bounded context with scoped Mem0 memories
+- `consultArchitect()` uses `buildAgentContext()` for architect consultation context
+- `transitionClose()` runs reflection after review gates and architect consultations
+- Graceful degradation: falls back to direct prompts when memory is unavailable
+- `@mesh-six/core@0.3.0` test suite: 70 tests, 135 assertions covering scoring, registry, context, and types
+
+**Dashboard (Completed):**
+- `@mesh-six/dashboard@0.1.0`: React + Vite + Tailwind real-time monitoring UI
+- Agent Registry view: table with status badges, capability chips, relative heartbeat times
+- Task Feed view: real-time scrolling task events from MQTT
+- Project Lifecycle view: state machine visualization (8 states) with project history
+- MQTT WebSocket integration via `MqttProvider` hook (configurable via `VITE_MQTT_URL`)
+
+**K8s Manifest Audit (Completed):**
+- `k8s/base/claude-mqtt-bridge/`: Deployment with Dapr sidecar, ClusterIP service
+- Audit confirmed all agents have correct `dapr.io/app-id`, port mapping, and image patterns
+
 **Remaining Work:**
 - Deploy to k8s and run full task lifecycle end-to-end
 - Test Claude MQTT Bridge in production environment
@@ -1191,6 +1227,337 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 - Scheduled reports on infrastructure costs
 - Alerts on unusual spending patterns
 
+### 5.4 — Milestone 5 Acceptance Criteria
+
+- [x] Homelab Monitor agent code complete with Grafana/Loki/Prometheus integration
+- [x] Infrastructure Manager agent code complete with Cloudflare, OPNsense, Caddy tools
+- [x] Cost Tracker agent code complete with LiteLLM and cluster resource tracking
+- [x] All three agents follow established agent template patterns
+- [x] Kubernetes manifests with Dapr sidecar annotations for all Milestone 5 agents
+- [ ] Deploy to k3s and verify agent discovery and task routing
+- [ ] Homelab Monitor resolves cluster health queries end-to-end
+- [ ] Cost Tracker produces scheduled spend reports
+
+### 5.5 — Milestone 5 Implementation Notes
+
+**In progress — agents being created in parallel**
+
+**Homelab Monitor Agent:**
+- Capabilities: `cluster-health`, `log-analysis`, `alert-investigation`, `resource-monitoring`
+- Grafana API integration for dashboards and metrics
+- Loki log querying for cross-namespace log analysis
+- Prometheus/Mimir metrics for resource monitoring and alerting
+- Memory integration for incident patterns
+
+**Infrastructure Manager Agent:**
+- Capabilities: `dns-management`, `firewall-management`, `proxy-management`, `infra-provisioning`
+- Cloudflare API for DNS and Zero Trust configurations
+- OPNsense API for firewall rule management
+- Caddy API for reverse proxy configuration
+- Memory integration for infrastructure change history
+
+**Cost Tracker Agent:**
+- Capabilities: `cost-reporting`, `usage-analysis`, `budget-alerts`, `resource-optimization`
+- LiteLLM usage tracking for LLM API spend
+- Kubernetes metrics API for cluster resource utilization
+- Scheduled reports and alert threshold monitoring
+- Memory integration for spending patterns
+
+---
+
+## Event Log — Standalone Module
+
+> Not tied to a specific milestone. Deploy when needed — the design is ready to pick up
+> in a single Claude Code session. Recommended before Milestone 4 (PM agent) since the
+> PM's multi-step workflows benefit most from event traceability.
+
+**Goal**: Immutable, append-only event log capturing all significant mesh-six activity.
+Provides a searchable audit trail for debugging and a foundation for future state replay/recovery.
+
+### Design Principles
+
+- **Append-only**: Events are never modified or deleted. Storage is cheap on Longhorn.
+- **Two ingestion paths**: Passive pub/sub tap (zero agent changes) + active agent-side emit (for internal decisions).
+- **Replay-ready**: Schema includes `seq` (global ordering), `aggregate_id` (scoping), and `idempotency_key` (dedup). Replay reducers are not built yet — but the data shape supports them when needed.
+- **Complements, doesn't replace**: `agent_task_history` stays as the hot-path scoring table. The event log is wide and forensic, not optimized for the scorer's tight query pattern.
+
+### Database Schema
+
+```sql
+-- migrations/003_mesh_six_events.sql
+
+CREATE TABLE mesh_six_events (
+  seq             BIGSERIAL PRIMARY KEY,
+  id              UUID NOT NULL DEFAULT gen_random_uuid(),
+  timestamp       TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- Correlation
+  trace_id        TEXT NOT NULL,
+  task_id         UUID,
+  agent_id        TEXT NOT NULL,
+
+  -- Event classification
+  event_type      TEXT NOT NULL,
+  event_version   INT NOT NULL DEFAULT 1,
+
+  -- Payload
+  payload         JSONB NOT NULL,
+
+  -- Replay support
+  aggregate_id    TEXT,
+  idempotency_key TEXT
+) PARTITION BY RANGE (timestamp);
+
+-- Create initial partitions (extend as needed)
+CREATE TABLE mesh_six_events_2026_02 PARTITION OF mesh_six_events
+  FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+CREATE TABLE mesh_six_events_2026_03 PARTITION OF mesh_six_events
+  FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
+
+-- Indexes
+CREATE INDEX idx_events_trace ON mesh_six_events (trace_id);
+CREATE INDEX idx_events_task ON mesh_six_events (task_id) WHERE task_id IS NOT NULL;
+CREATE INDEX idx_events_agent_type ON mesh_six_events (agent_id, event_type, timestamp DESC);
+CREATE INDEX idx_events_aggregate ON mesh_six_events (aggregate_id, seq ASC)
+  WHERE aggregate_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_events_idempotency ON mesh_six_events (idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+```
+
+Partitioned by month for query performance. No retention policy — partitions accumulate indefinitely.
+A cron job or init script should create partitions 2-3 months ahead to avoid insert failures.
+
+### Event Types
+
+| Family | Event Type | Source | Payload (key fields) |
+|--------|-----------|--------|---------------------|
+| **Pub/sub** | `task.dispatched` | event-logger subscriber | `{ capability, targetAgent, priority, scores }` |
+| | `task.result` | event-logger subscriber | `{ success, durationMs, errorType? }` |
+| | `task.progress` | event-logger subscriber | `{ status, details }` |
+| | `task.timeout` | orchestrator | `{ agentId, timeoutMs, retryCount }` |
+| | `task.retry` | orchestrator | `{ previousAgent, nextAgent, reason }` |
+| **Decisions** | `llm.call` | tracedGenerateText wrapper | `{ model, systemPromptLength, promptLength, toolCount }` |
+| | `llm.response` | tracedGenerateText wrapper | `{ durationMs, responseLength, toolCallCount, finishReason }` |
+| | `tool.invocation` | agent tool wrapper | `{ toolName, inputSummary }` |
+| | `tool.result` | agent tool wrapper | `{ toolName, success, durationMs }` |
+| | `reflection.stored` | transitionClose | `{ scope, memoryCount, transitionFrom, transitionTo }` |
+| **State** | `state.transition` | PM agent | `{ from, to, taskId, trigger }` |
+| | `state.write` | Dapr middleware | `{ storeKey, operation }` |
+| | `agent.registered` | agent startup | `{ capabilities, healthChecks }` |
+| | `agent.deregistered` | agent shutdown | `{ reason }` |
+
+Full LLM prompts/responses are NOT logged by default (too large). Only metadata is captured.
+Agents can opt in to full payload logging via `{ logFullPayload: true }` in the emit call.
+
+### Core Library: `events.ts`
+
+```typescript
+// packages/core/src/events.ts
+
+import type postgres from "postgres";
+
+export interface MeshEvent {
+  traceId: string;
+  taskId?: string;
+  agentId: string;
+  eventType: string;
+  eventVersion?: number;
+  payload: Record<string, unknown>;
+  aggregateId?: string;
+  idempotencyKey?: string;
+}
+
+export interface EventQueryOpts {
+  traceId?: string;
+  taskId?: string;
+  agentId?: string;
+  eventType?: string;
+  afterSeq?: number;
+  beforeSeq?: number;
+  since?: Date;
+  until?: Date;
+  limit?: number;
+}
+
+export class EventLog {
+  constructor(private sql: postgres.Sql) {}
+
+  async emit(event: MeshEvent): Promise<void> {
+    await this.sql`
+      INSERT INTO mesh_six_events
+        (trace_id, task_id, agent_id, event_type, event_version,
+         payload, aggregate_id, idempotency_key)
+      VALUES (
+        ${event.traceId}, ${event.taskId ?? null}, ${event.agentId},
+        ${event.eventType}, ${event.eventVersion ?? 1},
+        ${this.sql.json(event.payload)},
+        ${event.aggregateId ?? null}, ${event.idempotencyKey ?? null}
+      )
+    `;
+  }
+
+  async emitBatch(events: MeshEvent[]): Promise<void> {
+    if (events.length === 0) return;
+    await this.sql`
+      INSERT INTO mesh_six_events
+        ${this.sql(events.map(e => ({
+          trace_id: e.traceId,
+          task_id: e.taskId ?? null,
+          agent_id: e.agentId,
+          event_type: e.eventType,
+          event_version: e.eventVersion ?? 1,
+          payload: this.sql.json(e.payload),
+          aggregate_id: e.aggregateId ?? null,
+          idempotency_key: e.idempotencyKey ?? null,
+        })))}
+    `;
+  }
+
+  async query(opts: EventQueryOpts): Promise<(MeshEvent & { seq: number })[]> {
+    return this.sql`
+      SELECT * FROM mesh_six_events
+      WHERE true
+        ${opts.traceId ? this.sql`AND trace_id = ${opts.traceId}` : this.sql``}
+        ${opts.taskId ? this.sql`AND task_id = ${opts.taskId}` : this.sql``}
+        ${opts.agentId ? this.sql`AND agent_id = ${opts.agentId}` : this.sql``}
+        ${opts.eventType ? this.sql`AND event_type = ${opts.eventType}` : this.sql``}
+        ${opts.afterSeq ? this.sql`AND seq > ${opts.afterSeq}` : this.sql``}
+        ${opts.beforeSeq ? this.sql`AND seq < ${opts.beforeSeq}` : this.sql``}
+        ${opts.since ? this.sql`AND timestamp >= ${opts.since}` : this.sql``}
+        ${opts.until ? this.sql`AND timestamp <= ${opts.until}` : this.sql``}
+      ORDER BY seq ASC
+      LIMIT ${opts.limit ?? 100}
+    `;
+  }
+
+  async replay(aggregateId: string, afterSeq?: number): Promise<(MeshEvent & { seq: number })[]> {
+    return this.sql`
+      SELECT * FROM mesh_six_events
+      WHERE aggregate_id = ${aggregateId}
+        ${afterSeq ? this.sql`AND seq > ${afterSeq}` : this.sql``}
+      ORDER BY seq ASC
+    `;
+  }
+}
+```
+
+### Traced LLM Wrapper: `ai.ts`
+
+```typescript
+// packages/core/src/ai.ts
+// Wraps Vercel AI SDK generateText with automatic event logging
+
+import { generateText, type GenerateTextResult } from "ai";
+import type { EventLog } from "./events";
+
+interface TraceContext {
+  eventLog: EventLog;
+  traceId: string;
+  agentId: string;
+  taskId?: string;
+  logFullPayload?: boolean;  // Default false — opt in for debugging
+}
+
+export async function tracedGenerateText(
+  opts: Parameters<typeof generateText>[0],
+  ctx: TraceContext
+): Promise<GenerateTextResult<any>> {
+  const startTime = Date.now();
+
+  await ctx.eventLog.emit({
+    traceId: ctx.traceId,
+    taskId: ctx.taskId,
+    agentId: ctx.agentId,
+    eventType: "llm.call",
+    aggregateId: ctx.taskId ? `task:${ctx.taskId}` : undefined,
+    payload: {
+      model: String(opts.model),
+      systemPromptLength: opts.system?.length ?? 0,
+      promptLength: typeof opts.prompt === "string" ? opts.prompt.length : 0,
+      toolCount: opts.tools ? Object.keys(opts.tools).length : 0,
+      ...(ctx.logFullPayload ? { system: opts.system, prompt: opts.prompt } : {}),
+    },
+  });
+
+  const result = await generateText(opts);
+
+  await ctx.eventLog.emit({
+    traceId: ctx.traceId,
+    taskId: ctx.taskId,
+    agentId: ctx.agentId,
+    eventType: "llm.response",
+    aggregateId: ctx.taskId ? `task:${ctx.taskId}` : undefined,
+    payload: {
+      durationMs: Date.now() - startTime,
+      responseLength: result.text.length,
+      toolCallCount: result.toolCalls?.length ?? 0,
+      finishReason: result.finishReason,
+      ...(ctx.logFullPayload ? { response: result.text } : {}),
+    },
+  });
+
+  return result;
+}
+```
+
+### Event Logger Service
+
+A lightweight Bun service that subscribes to all Dapr pub/sub topics and writes
+events to the log. Deployed as a standalone pod with a Dapr sidecar.
+
+```typescript
+// apps/event-logger/src/index.ts (sketch)
+//
+// Subscribes to:
+//   - tasks.* (wildcard — all agent task topics)
+//   - task-results
+//   - task-progress
+//
+// For each message: extract trace_id, task_id, agent_id from the Dapr
+// CloudEvent envelope, classify the event type, write to mesh_six_events.
+//
+// This service has NO LLM dependency — it's pure infrastructure.
+// ~100 lines of code. Single responsibility.
+```
+
+### Integration Points
+
+When agents adopt the event log:
+
+1. Replace `generateText()` calls with `tracedGenerateText()` from `@mesh-six/core/ai`
+2. Add `EventLog` instance alongside existing `AgentRegistry` and `AgentScorer` in agent setup
+3. Generate a `traceId` (UUID) at task receipt, thread it through all operations
+4. The `event-logger` service handles pub/sub events with no agent code changes
+
+### Replay (Future — Design Only)
+
+State reconstruction follows this pattern when eventually built:
+
+```
+replay("task:{uuid}")
+  → returns ordered events for that task
+  → reducer function applies each event to build state:
+      task.dispatched → { status: "dispatched", agent: "..." }
+      llm.call → { ...state, llmCalls: [..., { model, timestamp }] }
+      state.transition → { ...state, currentState: "REVIEW" }
+      task.result → { ...state, status: "completed", result: {...} }
+```
+
+The reducer is task-type-specific. PM workflows have the most complex reducers
+because they have the most state transitions. Simple agent tasks need only
+dispatched → result.
+
+### Event Log Acceptance Criteria
+
+- [ ] `mesh_six_events` table created with monthly partitions
+- [ ] Partition auto-creation script/cron (creates 3 months ahead)
+- [ ] `EventLog` class in `@mesh-six/core` with emit, emitBatch, query, replay
+- [ ] `tracedGenerateText` wrapper in `@mesh-six/core/ai`
+- [ ] `event-logger` service deployed, subscribing to all pub/sub topics
+- [ ] Events queryable by trace_id, task_id, agent_id, event_type, time range
+- [ ] Existing agents migrated from `generateText` to `tracedGenerateText`
+- [ ] Events visible in Grafana (Loki or direct PostgreSQL datasource)
+
 ---
 
 ## Cross-Cutting Concerns
@@ -1208,7 +1575,7 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 - **Traces**: Dapr auto-generates OpenTelemetry traces → Grafana Tempo
 - **Logs**: Structured JSON logs from Bun → Loki (via existing log collection)
 - **Metrics**: Dapr sidecar metrics → Prometheus/Mimir → Grafana dashboards
-- **Dashboard** (future): RabbitMQ MQTT websocket feed for real-time agent activity
+- **Dashboard**: `@mesh-six/dashboard` — React + Vite app with MQTT WebSocket for real-time agent activity
 
 ### Error Handling
 
@@ -1416,11 +1783,15 @@ mesh-six/
 ├── packages/
 │   └── core/                    # @mesh-six/core shared library
 │       ├── src/
-│       │   ├── types.ts         # Shared type definitions
+│       │   ├── types.ts         # Shared type definitions (Zod schemas)
 │       │   ├── registry.ts      # Agent registry (Dapr state)
 │       │   ├── scoring.ts       # Agent scoring logic
 │       │   ├── context.ts       # Context builder + reflect-before-reset
-│       │   └── memory.ts        # Mem0 client wrapper
+│       │   ├── events.ts        # Immutable event log (append-only)
+│       │   ├── ai.ts            # Traced LLM wrappers (generateText + event logging)
+│       │   ├── memory.ts        # Mem0 client wrapper
+│       │   └── index.ts         # Public exports
+│       ├── __tests__/           # 70 tests, 135 assertions
 │       ├── package.json
 │       └── tsconfig.json
 ├── apps/
@@ -1435,9 +1806,11 @@ mesh-six/
 │   ├── ui-agent/                # Milestone 3 - Frontend UI development
 │   ├── project-manager/         # Milestone 4 - Project lifecycle + Dapr Workflow
 │   ├── claude-mqtt-bridge/      # Milestone 4 - Claude Code hooks → MQTT
-│   ├── homelab-monitor/         # Milestone 5
-│   ├── infra-manager/           # Milestone 5
-│   └── cost-tracker/            # Milestone 5
+│   ├── dashboard/               # Milestone 4 - React + Vite real-time monitoring UI
+│   ├── homelab-monitor/         # Milestone 5 - Cluster health + log analysis
+│   ├── infra-manager/           # Milestone 5 - DNS, firewall, proxy management
+│   ├── cost-tracker/            # Milestone 5 - LLM spend + resource tracking
+│   └── event-logger/            # Standalone — pub/sub event tap
 ├── docs/
 │   └── CLAUDE_PROGRESS_UI.md    # Guide for building Claude progress UIs
 ├── dapr/
@@ -1447,20 +1820,23 @@ mesh-six/
 │       ├── outbox-postgresql.yaml
 │       └── resiliency.yaml
 ├── k8s/
-│   ├── base/                    # Base kustomize manifests
+│   ├── base/                    # Base kustomize manifests (15 services)
 │   │   ├── namespace.yaml
+│   │   ├── kustomization.yaml
 │   │   ├── simple-agent/
 │   │   ├── orchestrator/
+│   │   ├── claude-mqtt-bridge/
+│   │   ├── dashboard/
 │   │   └── ...per-agent/
 │   └── overlays/
 │       ├── dev/                 # Local development overrides
-│       └── prod/                # Production cluster
+│       └── prod/                # Production cluster (all agents)
 ├── migrations/
 │   ├── 001_agent_task_history.sql
-│   └── 002_repo_registry.sql
+│   ├── 002_repo_registry.sql
+│   └── 003_mesh_six_events.sql
 ├── docker/
-│   ├── Dockerfile.agent         # Shared Dockerfile for Bun agents
-│   └── Dockerfile.mem0          # Mem0 service container
+│   └── Dockerfile.agent         # Shared Dockerfile for Bun agents
 ├── .github/
 │   └── workflows/
 │       └── build-deploy.yaml    # CI/CD for agent images
@@ -1539,4 +1915,4 @@ Milestones are designed to be completed in order. Each builds on the infrastruct
 
 *Document created: February 10, 2026*
 *Architecture designed through iterative discussion between Jay and Claude*
-*Last updated: v1.1 — renamed to Mesh Six, added context management pattern*
+*Last updated: v1.3 — corrected Mem0 architecture, added new M3 agents, added event log module*

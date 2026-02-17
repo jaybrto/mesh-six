@@ -17,6 +17,10 @@ resources:
   - argocd-deployer/
   - kubectl-deployer/
   - claude-mqtt-bridge/
+  - homelab-monitor/
+  - infra-manager/
+  - cost-tracker/
+  - dashboard/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

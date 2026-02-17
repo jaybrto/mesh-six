@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homelab-monitor
+  namespace: mesh-six
+  labels:
+    app: homelab-monitor
+    app.kubernetes.io/part-of: mesh-six
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: homelab-monitor
+  template:
+    metadata:
+      labels:
+        app: homelab-monitor
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "homelab-monitor"
+        dapr.io/app-port: "3000"
+        dapr.io/log-level: "info"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+    spec:
+      containers:
+        - name: homelab-monitor
+          image: registry.bto.bar/mesh-six/homelab-monitor:latest
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: AGENT_ID
+              value: "homelab-monitor"
+            - name: AGENT_NAME
+              value: "Homelab Monitor"
+            - name: APP_PORT
+              value: "3000"
+            - name: GRAFANA_URL
+              value: "http://grafana.monitoring:3000"
+            - name: PROMETHEUS_URL
+              value: "http://prometheus.monitoring:9090"
+            - name: LITELLM_BASE_URL
+              value: "http://litellm.litellm:4000/v1"
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-secret
+                  key: api-key
+            - name: LLM_MODEL
+              value: "anthropic/claude-sonnet-4-20250514"
+            - name: MEMORY_ENABLED
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"

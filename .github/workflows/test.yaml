@@ -1,0 +1,99 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck core
+        run: cd packages/core && bun run typecheck
+
+      - name: Test core
+        run: cd packages/core && bun test
+
+  detect-changed-apps:
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.filter.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed apps
+        id: filter
+        run: |
+          CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+
+          ALL_APPS=(
+            api-coder
+            architect-agent
+            argocd-deployer
+            claude-mqtt-bridge
+            dashboard
+            kubectl-deployer
+            orchestrator
+            project-manager
+            qa-tester
+            researcher-agent
+            simple-agent
+            ui-agent
+          )
+
+          APPS=()
+          for app in "${ALL_APPS[@]}"; do
+            if echo "$CHANGED_FILES" | grep -q "^apps/${app}/"; then
+              APPS+=("$app")
+            fi
+          done
+
+          # If core changed, typecheck all apps
+          if echo "$CHANGED_FILES" | grep -q '^packages/core/'; then
+            APPS=("${ALL_APPS[@]}")
+          fi
+
+          UNIQUE_APPS=($(echo "${APPS[@]}" | tr ' ' '\n' | sort -u))
+
+          if [ ${#UNIQUE_APPS[@]} -eq 0 ]; then
+            echo 'apps=[]' >> "$GITHUB_OUTPUT"
+          else
+            JSON=$(printf '%s\n' "${UNIQUE_APPS[@]}" | jq -R . | jq -sc .)
+            echo "apps=$JSON" >> "$GITHUB_OUTPUT"
+          fi
+
+  typecheck-apps:
+    needs: detect-changed-apps
+    if: ${{ needs.detect-changed-apps.outputs.apps != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJson(needs.detect-changed-apps.outputs.apps) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck ${{ matrix.app }}
+        run: cd apps/${{ matrix.app }} && bun run typecheck

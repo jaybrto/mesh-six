@@ -75,6 +75,22 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/cost-tracker": {
+      "name": "@mesh-six/cost-tracker",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.2.0",
+        "@dapr/dapr": "^3.4.2",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.1.52",
+        "hono": "^4.7.4",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/dashboard": {
       "name": "@mesh-six/dashboard",
       "version": "0.1.0",
@@ -93,6 +109,38 @@
         "tailwindcss": "^4.0.0",
         "typescript": "^5.7.3",
         "vite": "^6.1.0",
+      },
+    },
+    "apps/homelab-monitor": {
+      "name": "@mesh-six/homelab-monitor",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.2.0",
+        "@dapr/dapr": "^3.4.2",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.1.52",
+        "hono": "^4.7.4",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
+      },
+    },
+    "apps/infra-manager": {
+      "name": "@mesh-six/infra-manager",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.2.0",
+        "@dapr/dapr": "^3.4.2",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.1.52",
+        "hono": "^4.7.4",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "typescript": "^5.7.3",
       },
     },
     "apps/kubectl-deployer": {
@@ -419,7 +467,13 @@
 
     "@mesh-six/core": ["@mesh-six/core@workspace:packages/core"],
 
+    "@mesh-six/cost-tracker": ["@mesh-six/cost-tracker@workspace:apps/cost-tracker"],
+
     "@mesh-six/dashboard": ["@mesh-six/dashboard@workspace:apps/dashboard"],
+
+    "@mesh-six/homelab-monitor": ["@mesh-six/homelab-monitor@workspace:apps/homelab-monitor"],
+
+    "@mesh-six/infra-manager": ["@mesh-six/infra-manager@workspace:apps/infra-manager"],
 
     "@mesh-six/kubectl-deployer": ["@mesh-six/kubectl-deployer@workspace:apps/kubectl-deployer"],
 

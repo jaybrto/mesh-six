@@ -11,3 +11,29 @@ images:
     newTag: latest
   - name: registry.bto.bar/mesh-six/simple-agent
     newTag: latest
+  - name: registry.bto.bar/mesh-six/architect-agent
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/researcher-agent
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/project-manager
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/qa-tester
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/api-coder
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/ui-agent
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/argocd-deployer
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/kubectl-deployer
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/claude-mqtt-bridge
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/homelab-monitor
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/infra-manager
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/cost-tracker
+    newTag: latest
+  - name: registry.bto.bar/mesh-six/dashboard
+    newTag: latest

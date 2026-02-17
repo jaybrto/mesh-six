@@ -1,0 +1,138 @@
+name: Build & Deploy Agents
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: "Specific agent to build (leave empty to auto-detect)"
+        required: false
+        type: string
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      agents: ${{ steps.filter.outputs.agents }}
+      core-changed: ${{ steps.filter.outputs.core-changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed agents
+        id: filter
+        run: |
+          if [ -n "${{ inputs.agent }}" ]; then
+            echo 'agents=["${{ inputs.agent }}"]' >> "$GITHUB_OUTPUT"
+            echo "core-changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+
+          CORE_CHANGED=false
+          if echo "$CHANGED_FILES" | grep -q '^packages/core/'; then
+            CORE_CHANGED=true
+          fi
+          echo "core-changed=$CORE_CHANGED" >> "$GITHUB_OUTPUT"
+
+          AGENTS=()
+          # Agents that use the shared Dockerfile (excludes dashboard)
+          BUILDABLE_AGENTS=(
+            api-coder
+            architect-agent
+            argocd-deployer
+            claude-mqtt-bridge
+            kubectl-deployer
+            orchestrator
+            project-manager
+            qa-tester
+            researcher-agent
+            simple-agent
+            ui-agent
+          )
+
+          for agent in "${BUILDABLE_AGENTS[@]}"; do
+            if echo "$CHANGED_FILES" | grep -q "^apps/${agent}/"; then
+              AGENTS+=("$agent")
+            fi
+          done
+
+          # If core changed, rebuild all agents
+          if [ "$CORE_CHANGED" = "true" ]; then
+            AGENTS=("${BUILDABLE_AGENTS[@]}")
+          fi
+
+          # If Dockerfile changed, rebuild all agents
+          if echo "$CHANGED_FILES" | grep -q '^docker/Dockerfile.agent'; then
+            AGENTS=("${BUILDABLE_AGENTS[@]}")
+          fi
+
+          # Deduplicate
+          UNIQUE_AGENTS=($(echo "${AGENTS[@]}" | tr ' ' '\n' | sort -u))
+
+          if [ ${#UNIQUE_AGENTS[@]} -eq 0 ]; then
+            echo 'agents=[]' >> "$GITHUB_OUTPUT"
+          else
+            JSON=$(printf '%s\n' "${UNIQUE_AGENTS[@]}" | jq -R . | jq -sc .)
+            echo "agents=$JSON" >> "$GITHUB_OUTPUT"
+          fi
+
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck core
+        run: cd packages/core && bun run typecheck
+
+      - name: Test core
+        run: cd packages/core && bun test
+
+  build-push:
+    needs: [detect-changes, core-tests]
+    if: ${{ needs.detect-changes.outputs.agents != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: ${{ fromJson(needs.detect-changes.outputs.agents) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to registry
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login registry.bto.bar -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+      - name: Set image tags
+        id: tags
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "image=registry.bto.bar/mesh-six/${{ matrix.agent }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f docker/Dockerfile.agent \
+            --build-arg AGENT_APP=${{ matrix.agent }} \
+            -t ${{ steps.tags.outputs.image }}:latest \
+            -t ${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.sha }} \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ steps.tags.outputs.image }}:latest
+          docker push ${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.sha }}
