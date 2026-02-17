@@ -143,9 +143,15 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
-HANDOFF.md
 
 # Claude Code local event database
 claude-events.db
 claude-events.db-wal
 claude-events.db-shm
+
+# Planning docs
+docs/PLAN_PROMPT.md
+docs/PLAN_HANDOFF.md
+
+# History
+.history/
