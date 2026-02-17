@@ -5,6 +5,9 @@
  * A lightweight Bun script that receives Claude Code hook events via stdin
  * and publishes them to MQTT for real-time progress monitoring.
  *
+ * Locally, events are always stored to a SQLite database for querying.
+ * MQTT publishing is attempted but optional (designed for k8s pods).
+ *
  * Usage:
  *   echo '{"session_id":"abc","hook_event_name":"SessionStart"}' | bun run src/index.ts
  *
@@ -12,20 +15,32 @@
  *   MQTT_URL          - MQTT broker URL (default: mqtt://localhost:1883)
  *   MQTT_TOPIC_PREFIX - Topic prefix (default: claude/progress)
  *   MQTT_CLIENT_ID    - Client ID prefix (default: claude-bridge)
+ *   SQLITE_DB_PATH    - SQLite database path (default: $CLAUDE_PROJECT_DIR/.claude/claude-events.db)
+ *   SQLITE_DISABLED   - Set "true" to skip SQLite storage
  *   GIT_BRANCH        - Override git branch detection
  *   WORKTREE_PATH     - Override worktree path detection
  *   JOB_ID            - Optional job ID for mesh-six integration
  */
 
 import * as mqtt from "mqtt";
+import { Database } from "bun:sqlite";
 import { spawn } from "child_process";
-
+import { mkdirSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 // --- Configuration ---
 const MQTT_URL = process.env.MQTT_URL || "mqtt://localhost:1883";
 const MQTT_TOPIC_PREFIX = process.env.MQTT_TOPIC_PREFIX || "claude/progress";
 const MQTT_CLIENT_ID = `${process.env.MQTT_CLIENT_ID || "claude-bridge"}-${Date.now()}`;
 const CONNECT_TIMEOUT_MS = 3000;
 const PUBLISH_TIMEOUT_MS = 2000;
+
+function resolveDbPath(): string {
+  if (process.env.SQLITE_DB_PATH) return process.env.SQLITE_DB_PATH;
+  if (process.env.CLAUDE_PROJECT_DIR) return join(process.env.CLAUDE_PROJECT_DIR, ".claude", "claude-events.db");
+  return join(process.cwd(), ".claude", "claude-events.db");
+}
+const SQLITE_DB_PATH = resolveDbPath();
+const SQLITE_DISABLED = process.env.SQLITE_DISABLED === "true";
 
 // --- Types ---
 
@@ -306,22 +321,71 @@ async function publishToMqtt(event: EnrichedEvent): Promise<void> {
   });
 }
 
-/**
- * Write event to fallback log file
- */
-async function writeToFallbackLog(event: EnrichedEvent): Promise<void> {
-  const logPath = process.env.MQTT_FALLBACK_LOG || "/tmp/claude-mqtt-fallback.jsonl";
-  const line = JSON.stringify(event) + "\n";
+// --- SQLite Local Storage ---
 
-  try {
-    // Append to file using Bun.file and writer
-    const file = Bun.file(logPath);
-    const existingContent = await file.exists() ? await file.text() : "";
-    await Bun.write(logPath, existingContent + line);
-  } catch {
-    // Last resort: write to stderr
-    console.error(JSON.stringify(event));
+let db: Database | null = null;
+
+function getDb(): Database {
+  if (db) return db;
+
+  const dir = dirname(SQLITE_DB_PATH);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
+
+  db = new Database(SQLITE_DB_PATH);
+  db.run("PRAGMA journal_mode = WAL");
+  db.run("PRAGMA busy_timeout = 3000");
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS claude_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      session_id TEXT NOT NULL,
+      event TEXT NOT NULL,
+      status TEXT NOT NULL,
+      git_branch TEXT,
+      worktree_path TEXT,
+      model TEXT,
+      job_id TEXT,
+      tool_name TEXT,
+      error TEXT,
+      agent_id TEXT,
+      agent_type TEXT,
+      payload TEXT NOT NULL
+    )
+  `);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_events_session ON claude_events (session_id, timestamp)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_events_type ON claude_events (event, timestamp)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_events_tool ON claude_events (tool_name) WHERE tool_name IS NOT NULL`);
+
+  return db;
+}
+
+const insertStmt = () => getDb().prepare(`
+  INSERT INTO claude_events
+    (timestamp, session_id, event, status, git_branch, worktree_path, model, job_id, tool_name, error, agent_id, agent_type, payload)
+  VALUES
+    ($timestamp, $session_id, $event, $status, $git_branch, $worktree_path, $model, $job_id, $tool_name, $error, $agent_id, $agent_type, $payload)
+`);
+
+function writeToSqlite(event: EnrichedEvent): void {
+  insertStmt().run({
+    $timestamp: event.timestamp,
+    $session_id: event.session_id,
+    $event: event.event,
+    $status: event.status,
+    $git_branch: event.git_branch ?? null,
+    $worktree_path: event.worktree_path ?? null,
+    $model: event.model ?? null,
+    $job_id: event.job_id ?? null,
+    $tool_name: event.tool_name ?? null,
+    $error: event.error ?? null,
+    $agent_id: event.agent_id ?? null,
+    $agent_type: event.agent_type ?? null,
+    $payload: JSON.stringify(event),
+  });
 }
 
 // --- Main ---
@@ -353,18 +417,24 @@ async function main(): Promise<void> {
     // Enrich event
     const enriched = await enrichEvent(input);
 
-    // Try to publish to MQTT
+    // Always write to local SQLite (fast, no network)
+    if (!SQLITE_DISABLED) {
+      try {
+        writeToSqlite(enriched);
+      } catch (err) {
+        console.error(`[claude-mqtt-bridge] SQLite write failed: ${err}`);
+      }
+    }
+
+    // Try to publish to MQTT (optional, for k8s environments)
     try {
       await publishToMqtt(enriched);
 
-      // Log success in verbose mode
       if (process.env.VERBOSE === "true") {
         console.log(`[claude-mqtt-bridge] Published ${enriched.event} to MQTT`);
       }
-    } catch (err) {
-      // MQTT failed, write to fallback log
-      console.error(`[claude-mqtt-bridge] MQTT publish failed: ${err}`);
-      await writeToFallbackLog(enriched);
+    } catch {
+      // MQTT unavailable — expected when running locally
     }
 
     // Exit successfully (don't block Claude)

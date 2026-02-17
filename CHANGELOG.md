@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - Claude MQTT Bridge: Local SQLite Storage
+- **@mesh-six/claude-mqtt-bridge@0.2.0**: SQLite local event storage
+  - All hook events now stored to `$CLAUDE_PROJECT_DIR/.claude/claude-events.db` via `bun:sqlite` (zero deps)
+  - WAL mode for concurrent-safe writes from parallel async hooks
+  - Indexed columns: `(session_id, timestamp)`, `(event, timestamp)`, `(tool_name)`
+  - Full enriched event stored in `payload` JSON column for ad-hoc queries
+  - MQTT publishing still attempted but failures are now silent (expected locally)
+  - Removed racy JSONL fallback (read-then-write was not concurrent-safe)
+  - New env vars: `SQLITE_DB_PATH` (default: `$CLAUDE_PROJECT_DIR/.claude/claude-events.db`), `SQLITE_DISABLED`
+- **docs/CLAUDE_PROGRESS_UI.md**: Added local development section with SQLite query examples
+
+### Added - Milestone 5: Infrastructure Agents
+- **@mesh-six/homelab-monitor@0.1.0**: Cluster health monitoring agent
+  - Capabilities: `cluster-monitoring` (1.0), `log-analysis` (0.9), `alert-triage` (0.85)
+  - Tools: query_grafana, query_loki, query_prometheus, check_pod_health, get_alerts
+  - Grafana/Loki/Prometheus integration for Jay's k3s homelab
+  - Memory integration for alert patterns and resolution history
+- **@mesh-six/infra-manager@0.1.0**: DNS & proxy management agent
+  - Capabilities: `dns-management` (1.0), `proxy-management` (0.9), `firewall-management` (0.8)
+  - Tools: cloudflare_dns_list/create/update, cloudflare_tunnel_list, caddy_get_config/update_route
+  - Cloudflare + Caddy integration with safety guards (read-before-write)
+  - Memory integration for DNS records and proxy configurations
+- **@mesh-six/cost-tracker@0.1.0**: LLM spend & resource tracking agent
+  - Capabilities: `cost-reporting` (1.0), `usage-analysis` (0.9), `spend-alerting` (0.85)
+  - Tools: query_litellm_spend/models, query_cluster_resources, generate_cost_report
+  - LiteLLM spend API and Prometheus resource usage integration
+  - Memory integration for spending trends and anomaly patterns
+
+### Added - CI/CD Pipeline
+- **.github/workflows/build-deploy.yaml**: Matrix build pipeline for all agents
+  - Change detection: rebuilds only affected agents (plus all if core/ changes)
+  - Docker build with shared Dockerfile.agent, push to registry.bto.bar
+  - Tags: `:latest` and `:{sha}` per agent
+  - Manual trigger with optional agent targeting
+- **.github/workflows/test.yaml**: PR validation pipeline
+  - Core library typecheck + tests
+  - Matrix typecheck for changed apps
+
+### Added - K8s & Dapr Infrastructure Completion
+- K8s manifests for homelab-monitor, infra-manager, cost-tracker, dashboard (15 total services)
+- Dashboard served via nginx (no Dapr sidecar) as static Vite SPA
+- **dapr/components/outbox-postgresql.yaml**: Atomic state + publish via outbox pattern
+- **k8s/argocd-application.yaml**: ArgoCD Application CR with automated sync, prune, selfHeal
+- **k8s/overlays/prod/**: Image entries for all 15 agents
+- **k8s/base/secrets.yaml**: Added cloudflare-secret for infra-manager
+
 ### Added - Milestone 4 Completion: Context Integration, Tests, Dashboard, K8s
 
 #### Context Management Integration

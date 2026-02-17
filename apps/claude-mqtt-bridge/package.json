@@ -1,6 +1,6 @@
 {
   "name": "@mesh-six/claude-mqtt-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "bin": {
     "claude-mqtt-bridge": "./dist/index.js"

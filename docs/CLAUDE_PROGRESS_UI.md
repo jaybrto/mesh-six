@@ -5,13 +5,17 @@ This document explains how to build a real-time UI for monitoring Claude Code se
 ## Overview
 
 ```
-┌─────────────────┐    MQTT     ┌─────────────────┐    WebSocket    ┌─────────────────┐
-│  Claude Code    │──────────▶│   RabbitMQ      │────────────────▶│   Progress UI   │
-│  + Hooks        │            │   MQTT Plugin   │                  │   (Browser)     │
-└─────────────────┘            └─────────────────┘                  └─────────────────┘
+┌─────────────────┐             ┌─────────────────┐    WebSocket    ┌─────────────────┐
+│  Claude Code    │──── MQTT ──▶│   RabbitMQ      │────────────────▶│   Progress UI   │
+│  + Hooks        │             │   MQTT Plugin   │                  │   (Browser)     │
+│                 │             └─────────────────┘                  └─────────────────┘
+│                 │──── Local ──▶ $CLAUDE_PROJECT_DIR/.claude/claude-events.db (SQLite)
+└─────────────────┘
 ```
 
-Claude Code hooks publish events to MQTT topics. A UI can subscribe to these topics via WebSocket (using RabbitMQ's MQTT-over-WebSocket) or through a backend service that bridges MQTT to WebSocket.
+Claude Code hooks publish events via two paths:
+1. **SQLite (local, always-on)**: Every event is stored to `$CLAUDE_PROJECT_DIR/.claude/claude-events.db` for local querying. Zero network dependency, concurrent-safe via WAL mode.
+2. **MQTT (cluster, optional)**: Events are published to RabbitMQ MQTT topics for real-time dashboards. Fails silently when the broker is unreachable (expected during local development).
 
 ---
 
@@ -136,6 +140,72 @@ interface NotificationEvent extends BaseEvent {
     type?: "permission_prompt" | "idle_prompt" | "auth_success" | "elicitation_dialog";
   };
 }
+```
+
+---
+
+## Local Development (SQLite)
+
+When running Claude Code locally (outside k8s), all hook events are automatically stored to a SQLite database at `$CLAUDE_PROJECT_DIR/.claude/claude-events.db`. No configuration needed — it works out of the box.
+
+### Querying Events
+
+```bash
+# Count all events
+sqlite3 $CLAUDE_PROJECT_DIR/.claude/claude-events.db "SELECT COUNT(*) FROM claude_events"
+
+# List sessions with event counts
+sqlite3 -header -column $CLAUDE_PROJECT_DIR/.claude/claude-events.db "
+  SELECT session_id, MIN(datetime(timestamp/1000, 'unixepoch', 'localtime')) as started,
+         COUNT(*) as events, COUNT(DISTINCT tool_name) as tools_used
+  FROM claude_events GROUP BY session_id ORDER BY started DESC LIMIT 10
+"
+
+# Tool usage breakdown for current session
+sqlite3 -header -column $CLAUDE_PROJECT_DIR/.claude/claude-events.db "
+  SELECT tool_name, COUNT(*) as uses, SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failures
+  FROM claude_events WHERE tool_name IS NOT NULL
+  GROUP BY tool_name ORDER BY uses DESC
+"
+
+# View errors
+sqlite3 -header -column $CLAUDE_PROJECT_DIR/.claude/claude-events.db "
+  SELECT datetime(timestamp/1000, 'unixepoch', 'localtime') as ts, tool_name, error
+  FROM claude_events WHERE event = 'PostToolUseFailure' ORDER BY timestamp DESC LIMIT 20
+"
+
+# Subagent activity
+sqlite3 -header -column $CLAUDE_PROJECT_DIR/.claude/claude-events.db "
+  SELECT datetime(timestamp/1000, 'unixepoch', 'localtime') as ts, event, agent_type, agent_id
+  FROM claude_events WHERE agent_type IS NOT NULL ORDER BY timestamp DESC LIMIT 20
+"
+
+# Purge events older than 7 days
+sqlite3 $CLAUDE_PROJECT_DIR/.claude/claude-events.db "
+  DELETE FROM claude_events WHERE timestamp < (strftime('%s','now','-7 days') * 1000)
+"
+```
+
+### SQLite Schema
+
+```sql
+CREATE TABLE claude_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp INTEGER NOT NULL,       -- Unix ms
+  session_id TEXT NOT NULL,
+  event TEXT NOT NULL,              -- SessionStart, PreToolUse, PostToolUse, etc.
+  status TEXT NOT NULL,             -- started, pending, completed, failed, ended
+  git_branch TEXT,
+  worktree_path TEXT,
+  model TEXT,
+  job_id TEXT,
+  tool_name TEXT,                   -- Bash, Write, Edit, Read, etc.
+  error TEXT,
+  agent_id TEXT,
+  agent_type TEXT,
+  payload TEXT NOT NULL             -- Full JSON event
+);
+-- Indexes on (session_id, timestamp), (event, timestamp), (tool_name)
 ```
 
 ---
@@ -487,10 +557,11 @@ done
 | `MQTT_URL` | `mqtt://localhost:1883` | MQTT broker URL |
 | `MQTT_TOPIC_PREFIX` | `claude/progress` | Topic prefix for events |
 | `MQTT_CLIENT_ID` | `claude-bridge` | MQTT client ID prefix |
+| `SQLITE_DB_PATH` | `$CLAUDE_PROJECT_DIR/.claude/claude-events.db` | SQLite database path for local storage |
+| `SQLITE_DISABLED` | `false` | Set `true` to skip SQLite storage |
 | `JOB_ID` | (none) | mesh-six job ID for project linking |
 | `GIT_BRANCH` | (auto-detect) | Override git branch |
 | `WORKTREE_PATH` | (auto-detect) | Override worktree path |
-| `MQTT_FALLBACK_LOG` | `/tmp/claude-mqtt-fallback.jsonl` | Fallback log when MQTT unavailable |
 | `VERBOSE` | `false` | Enable verbose logging |
 
 ### RabbitMQ MQTT Configuration
@@ -534,10 +605,10 @@ mosquitto_sub -h localhost -t "claude/progress/#" | jq .
 
 1. **Context Window Tracking**: Hook scripts could parse the transcript file to estimate token usage
 2. **Cost Estimation**: Track model usage and estimate API costs
-3. **Performance Metrics**: Measure tool execution times
+3. **Performance Metrics**: Measure tool execution times from SQLite data
 4. **Alerting**: Send alerts for failures or long-running operations
-5. **Historical Storage**: Store events in PostgreSQL for analysis
-6. **Grafana Dashboard**: Create dashboard using MQTT data source or via Prometheus metrics
+5. **Grafana Dashboard**: Create dashboard using MQTT data source or via Prometheus metrics
+6. **SQLite → PostgreSQL sync**: Batch-upload local SQLite events to cluster PostgreSQL for cross-machine analysis
 
 ---
 
