@@ -10,6 +10,8 @@ import {
   AgentRegistry,
   AgentMemory,
   createAgentMemoryFromEnv,
+  buildAgentContext,
+  transitionClose,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -17,6 +19,8 @@ import {
   type TaskResult,
   type DaprPubSubMessage,
   type DaprSubscription,
+  type ContextConfig,
+  type TransitionCloseConfig,
 } from "@mesh-six/core";
 import {
   createWorkflowRuntime,
@@ -290,7 +294,7 @@ At each review transition, evaluate:
 const projects = new Map<string, Project>();
 
 // --- Helper Functions ---
-async function consultArchitect(question: string): Promise<unknown> {
+async function consultArchitect(question: string, projectId?: string): Promise<unknown> {
   console.log(`[${AGENT_ID}] Consulting architect: "${question.substring(0, 50)}..."`);
 
   try {
@@ -300,6 +304,30 @@ async function consultArchitect(question: string): Promise<unknown> {
       HttpMethod.POST,
       { question, requireStructured: true }
     );
+
+    // Store reflection from architect consultation
+    if (memory) {
+      const closeConfig: TransitionCloseConfig = {
+        agentId: AGENT_ID,
+        taskId: projectId || "general",
+        projectId,
+        transitionFrom: "PLANNING",
+        transitionTo: "REVIEW",
+        conversationHistory: [
+          { role: "user", content: question },
+          { role: "assistant", content: JSON.stringify(response) },
+        ],
+        taskState: { action: "consult-architect" },
+      };
+
+      try {
+        // Cast needed: project-manager uses ai@4 (LanguageModelV1), core uses ai@6 (LanguageModel)
+        await transitionClose(closeConfig, memory, llm(LLM_MODEL) as any);
+      } catch (err) {
+        console.warn(`[${AGENT_ID}] transitionClose failed for architect consultation:`, err);
+      }
+    }
+
     return response;
   } catch (error) {
     console.warn(`[${AGENT_ID}] Architect consultation failed:`, error);
@@ -782,42 +810,78 @@ async function evaluateReviewGate(
     };
   }
 
-  const prompts: Record<string, string> = {
-    plan: `Evaluate this implementation plan for project "${project.title}":
-
-${JSON.stringify(context, null, 2)}
-
-Consider:
-- Are requirements clearly defined?
-- Is the technical approach sound?
-- Are there any missing considerations?
-- Is the scope appropriate?`,
-    qa: `Evaluate the QA results for project "${project.title}":
-
-${JSON.stringify(context, null, 2)}
-
-Consider:
-- Did all tests pass?
-- Is test coverage adequate?
-- Are there any regressions?
-- Is the code quality acceptable?`,
-    deployment: `Evaluate the deployment for project "${project.title}":
-
-${JSON.stringify(context, null, 2)}
-
-Consider:
-- Is the service healthy?
-- Are all endpoints responding?
-- Are there any errors in logs?
-- Is performance acceptable?`,
+  const gatePrompts: Record<string, string> = {
+    plan: `Evaluate this implementation plan for project "${project.title}". Consider: requirements clarity, technical soundness, missing considerations, scope appropriateness.`,
+    qa: `Evaluate the QA results for project "${project.title}". Consider: test pass rate, coverage adequacy, regressions, code quality.`,
+    deployment: `Evaluate the deployment for project "${project.title}". Consider: service health, endpoint responsiveness, log errors, performance.`,
   };
+
+  // Build context with memory-enriched prompt
+  const stateMap: Record<string, { from: ProjectState; to: ProjectState }> = {
+    plan: { from: "PLANNING", to: "REVIEW" },
+    qa: { from: "QA", to: "DEPLOY" },
+    deployment: { from: "DEPLOY", to: "VALIDATE" },
+  };
+
+  const taskRequest: TaskRequest = {
+    id: project.id,
+    capability: "review-gate",
+    payload: { gateType, ...context },
+    priority: 7,
+    timeout: 120,
+    requestedBy: AGENT_ID,
+    createdAt: new Date().toISOString(),
+  };
+
+  let systemPrompt = SYSTEM_PROMPT;
+  let prompt = `${gatePrompts[gateType]}\n\n${JSON.stringify(context, null, 2)}`;
+
+  // Use memory-enriched context if memory is available
+  if (memory) {
+    const contextConfig: ContextConfig = {
+      agentId: AGENT_ID,
+      systemPrompt: SYSTEM_PROMPT,
+      task: taskRequest,
+      memoryQuery: `${gateType} review gate ${project.title}`,
+      maxMemoryTokens: 1500,
+      additionalContext: gatePrompts[gateType],
+    };
+
+    const agentContext = await buildAgentContext(contextConfig, memory);
+    systemPrompt = agentContext.system;
+    prompt = agentContext.prompt;
+  }
 
   const { object } = await generateObject({
     model: llm(LLM_MODEL),
     schema: ReviewResultSchema,
-    system: SYSTEM_PROMPT,
-    prompt: prompts[gateType],
+    system: systemPrompt,
+    prompt,
   });
+
+  // Run reflection to store learnings from this review gate
+  if (memory) {
+    const { from, to } = stateMap[gateType];
+    const closeConfig: TransitionCloseConfig = {
+      agentId: AGENT_ID,
+      taskId: project.id,
+      projectId: project.id,
+      transitionFrom: from,
+      transitionTo: to,
+      conversationHistory: [
+        { role: "user", content: prompt },
+        { role: "assistant", content: JSON.stringify(object) },
+      ],
+      taskState: { gateType, approved: object.approved, confidence: object.confidence },
+    };
+
+    try {
+      // Cast needed: project-manager uses ai@4 (LanguageModelV1), core uses ai@6 (LanguageModel)
+      await transitionClose(closeConfig, memory, llm(LLM_MODEL) as any);
+    } catch (error) {
+      console.warn(`[${AGENT_ID}] transitionClose failed for ${gateType} gate:`, error);
+    }
+  }
 
   return object;
 }
@@ -1044,7 +1108,7 @@ app.post("/invoke", async (c) => {
       break;
 
     case "consult-architect":
-      result = await consultArchitect(task.description || "General architecture guidance needed");
+      result = await consultArchitect(task.description || "General architecture guidance needed", task.projectId);
       break;
 
     case "request-research":
@@ -1106,7 +1170,7 @@ app.post("/tasks", async (c) => {
         break;
 
       case "consult-architect":
-        result = await consultArchitect(projectTask.description || "");
+        result = await consultArchitect(projectTask.description || "", projectTask.projectId);
         break;
 
       case "request-research":

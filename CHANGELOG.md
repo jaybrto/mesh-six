@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Milestone 4 Completion: Context Integration, Tests, Dashboard, K8s
+
+#### Context Management Integration
+- **@mesh-six/project-manager@0.2.1**: Wired context.ts into PM workflow
+  - `evaluateReviewGate()` now uses `buildAgentContext()` for bounded context with scoped Mem0 memories
+  - `transitionClose()` runs reflection after LLM review gate responses, storing learnings (task/agent/project/global scope)
+  - `consultArchitect()` captures learnings from architect consultations via `transitionClose()`
+  - Graceful degradation: falls back to direct prompts when memory is unavailable
+
+#### Core Library Test Suite
+- **@mesh-six/core@0.3.0**: Comprehensive test suite (70 tests, 135 assertions)
+  - `scoring.test.ts`: AgentScorer rolling success rates, recency boost, dependency health, preferred bonus, sorting
+  - `registry.test.ts`: AgentRegistry CRUD, heartbeat, stale detection (degraded/offline), capability filtering
+  - `context.test.ts`: buildAgentContext assembly/truncation/estimation, transitionClose reflection + scoped storage
+  - `types.test.ts`: All 6 Zod schemas — validation, defaults, enum constraints, edge cases
+  - All tests mock external dependencies (Pool, DaprClient, AgentMemory, LLM) — no infrastructure required
+
+#### Web Dashboard
+- **@mesh-six/dashboard@0.1.0**: React + Vite + Tailwind real-time monitoring UI
+  - Agent Registry view: table with status badges, capability chips, relative heartbeat times
+  - Task Feed view: real-time scrolling task events from MQTT
+  - Project Lifecycle view: state machine visualization (8 states) with project history
+  - MQTT WebSocket integration via `MqttProvider` hook (configurable via `VITE_MQTT_URL`)
+  - Dark theme with mesh-six indigo branding
+  - Shared components: StatusBadge, RelativeTime, ConnectionIndicator
+
+#### K8s Manifest Audit
+- **k8s/base/claude-mqtt-bridge/**: New K8s manifests for MQTT bridge
+  - Deployment with Dapr sidecar, MQTT env vars, lightweight resources (64Mi/128Mi)
+  - ClusterIP service (port 80 → 3000)
+  - Added to base kustomization.yaml
+  - Audit confirmed all 10 existing agents have correct dapr.io/app-id, port mapping, and image patterns
+
+### Added - Context Window Management
+- **@mesh-six/core@0.3.0**: Context builder and reflect-before-reset utilities
+  - `buildAgentContext()` assembles bounded context per agent LLM call (system prompt + task payload + scoped Mem0 memories)
+  - Token budget enforcement with configurable `maxMemoryTokens` (default: 1500), drops lowest-relevance memories when over budget
+  - `transitionClose()` runs structured reflection at state boundaries via Vercel AI SDK `generateText` + `Output.object()`
+  - `REFLECTION_PROMPT` constant for guided reflection (outcome, pattern, guidance, reusable)
+  - Memory scoping: `task` (same task), `agent` (same agent type), `project` (all agents on project), `global` (cross-pollination)
+  - `resolveMemoryUserId()` maps scopes to Mem0 userId strings
+  - Added `ai` v6 as dependency for structured output generation
+
 ### Added - Claude MQTT Bridge for Real-time Progress Monitoring
 - **@mesh-six/claude-mqtt-bridge@0.1.0**: Bun script for Claude Code hooks → MQTT
   - Receives Claude hook events via stdin (JSON)

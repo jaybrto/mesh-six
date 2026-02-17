@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claude-mqtt-bridge
+  namespace: mesh-six
+  labels:
+    app: claude-mqtt-bridge
+    app.kubernetes.io/part-of: mesh-six
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: claude-mqtt-bridge
+  template:
+    metadata:
+      labels:
+        app: claude-mqtt-bridge
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "claude-mqtt-bridge"
+        dapr.io/app-port: "3000"
+        dapr.io/log-level: "info"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+    spec:
+      containers:
+        - name: claude-mqtt-bridge
+          image: registry.bto.bar/mesh-six/claude-mqtt-bridge:latest
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: MQTT_URL
+              value: "mqtt://rabbitmq.rabbitmq:1883"
+            - name: MQTT_TOPIC_PREFIX
+              value: "claude/progress"
+            - name: MQTT_CLIENT_ID
+              value: "claude-bridge"
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "250m"

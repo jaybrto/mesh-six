@@ -16,6 +16,7 @@ resources:
   - ui-agent/
   - argocd-deployer/
   - kubectl-deployer/
+  - claude-mqtt-bridge/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

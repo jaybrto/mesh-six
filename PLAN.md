@@ -1,6 +1,6 @@
-# Agent Mesh — Implementation Plan
+# Mesh Six — Implementation Plan
 
-> A microservices-based multi-agent orchestration system for k8s cluster.
+> A microservices-based multi-agent orchestration system for Jay's homelab k3s cluster.
 > Each milestone is self-contained and delivers immediately useful functionality.
 > This document is designed to be handed to Claude Code sessions as a project brief.
 
@@ -25,7 +25,7 @@
 
 ## Architecture Overview
 
-Agent Mesh is a collection of independent microservices deployed to a 6-node k3s cluster. Each agent is a Bun HTTP server with a Dapr sidecar that provides state management, pub/sub messaging, and service-to-service invocation. Agents communicate exclusively through Dapr — never directly to each other.
+Mesh Six is a collection of independent microservices deployed to a 6-node k3s cluster. Each agent is a Bun HTTP server with a Dapr sidecar that provides state management, pub/sub messaging, and service-to-service invocation. Agents communicate exclusively through Dapr — never directly to each other.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -112,7 +112,7 @@ These decisions were made through extensive design discussion and should not be 
 
 ### Infrastructure (Already Running)
 
-| Service | Role in Agent Mesh |
+| Service | Role in Mesh Six |
 |---------|-------------------|
 | RabbitMQ HA (operator) | Pub/sub backbone, task routing, MQTT events |
 | PostgreSQL HA (3-pod) | Task history, agent scoring data, Mem0 vector storage |
@@ -162,6 +162,10 @@ These decisions were made through extensive design discussion and should not be 
 ### 1.1 — Shared Library: `@mesh-six/core`
 
 A shared package containing types, utilities, and the Dapr integration layer that every agent uses.
+
+Includes: `types.ts` (shared interfaces), `registry.ts` (agent discovery via Dapr state),
+`scoring.ts` (weighted routing + historical performance), `memory.ts` (Mem0 client wrapper),
+and `context.ts` (context builder + reflect-before-reset pattern — see Cross-Cutting Concerns).
 
 ```typescript
 // packages/core/src/types.ts
@@ -421,7 +425,7 @@ const REGISTRATION: AgentRegistration = {
 };
 
 const SYSTEM_PROMPT = `You are a helpful assistant running as part of Jay's homelab 
-agent mesh. You can answer general questions and help with basic tasks.
+mesh-six agent mesh. You can answer general questions and help with basic tasks.
 Be concise and direct.`;
 
 // --- HTTP Server (Hono) ---
@@ -995,6 +999,19 @@ Failure paths:
 - QA → PLANNING (tests fail, create bug issue)
 - VALIDATE → PLANNING (deployed service fails, create bug with observations)
 
+**Context Management**: Each state transition is a fresh LLM call, not a continuation.
+The PM uses `buildAgentContext()` to assemble system prompt + structured task state (from Dapr)
++ scoped Mem0 memories for the current transition. Before each transition completes, the PM
+runs `transitionClose()` to reflect on insights worth preserving. This means:
+
+- Context window stays at ~3-5k tokens per transition regardless of task complexity
+- The PM learns from experience: a failed VALIDATE stores the failure pattern in Mem0
+- Future PLANNING transitions retrieve those failure patterns and avoid repeating them
+- Cross-agent learning: `global`-scoped reflections reach the Architect and other agents
+
+See [Context Window Management](#context-window-management) in Cross-Cutting Concerns for
+the full pattern, utilities, and memory scoping details.
+
 ### 4.2 — Project Board Integration
 
 **GitHub API**: `@octokit/rest` for project board manipulation
@@ -1082,6 +1099,10 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 - [x] Workflow survives pod restarts (Dapr Workflow durability)
 - [x] Progress events visible via MQTT subscription
 - [ ] Full task lifecycle completes: task → plan → code → test → deploy → validate (needs k8s deployment)
+- [ ] PM uses `buildAgentContext()` for each state transition (context stays <5k tokens)
+- [ ] PM runs `transitionClose()` reflection before each state boundary reset
+- [ ] Reflections stored in Mem0 are retrieved by subsequent transitions
+- [ ] Global-scoped reflections accessible by Architect and other agents
 
 ### 4.8 — Milestone 4 Implementation Notes
 
@@ -1197,6 +1218,188 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 - Dead letter queues in RabbitMQ for unprocessable messages
 - Dapr resiliency policies for timeouts and circuit breaking
 
+### Context Window Management
+
+Mesh Six agents maintain small, predictable context windows through two core patterns:
+**stateless task dispatch** (most agents) and **reflect-before-reset** (stateful agents like PM).
+
+#### Design Principle: Each Task is a Fresh AI Call
+
+Most agents (deployers, Architect, Researcher) receive a task, process it, and return a result.
+There is no persistent conversation — each LLM call is independent. Memory continuity comes
+from Mem0 retrieval, not from accumulating messages in a context window.
+
+#### Token Budget per Agent Call
+
+| Component | Budget | Notes |
+|-----------|--------|-------|
+| System prompt | 500–1,000 | Agent role, capabilities, homelab context |
+| Task/state payload | 200–500 | Structured JSON from Dapr state store |
+| Mem0 retrievals | ~1,000 | 5 results × ~200 tokens, scoped by relevance |
+| Tool call results | 1,000–3,000 | kubectl output, API responses, etc. |
+| **Total per call** | **~3–5k** | ~5% of Claude's context window |
+
+#### `buildAgentContext` Utility
+
+Every agent uses `buildAgentContext()` from `@mesh-six/core` before making an LLM call.
+This function assembles system prompt + task payload + scoped Mem0 retrieval + tool schemas,
+with a configurable token ceiling. If retrieval results push past the budget, it truncates
+the lowest-relevance memories.
+
+```typescript
+// packages/core/src/context.ts
+
+export interface ContextConfig {
+  agentId: string;
+  systemPrompt: string;
+  task: TaskRequest;
+  memoryQuery?: string;         // Scoped query for Mem0 retrieval
+  maxMemoryTokens?: number;     // Default: 1500
+  maxToolResultTokens?: number; // Default: 3000
+  additionalContext?: string;   // Structured state, previous reflections, etc.
+}
+
+export interface AgentContext {
+  system: string;
+  prompt: string;
+  estimatedTokens: number;
+}
+
+export async function buildAgentContext(
+  config: ContextConfig,
+  memory: AgentMemory
+): Promise<AgentContext> {
+  const maxMemTokens = config.maxMemoryTokens ?? 1500;
+
+  // Retrieve scoped memories
+  let memories: string[] = [];
+  if (config.memoryQuery) {
+    memories = await memory.remember(config.memoryQuery);
+    // Rough token estimation: 1 token ≈ 4 chars
+    let totalChars = memories.join("\n").length;
+    while (totalChars > maxMemTokens * 4 && memories.length > 1) {
+      memories.pop(); // Drop lowest-relevance (last) result
+      totalChars = memories.join("\n").length;
+    }
+  }
+
+  const memoryBlock = memories.length > 0
+    ? `\n\nRelevant context from past interactions:\n${memories.map(m => `- ${m}`).join("\n")}`
+    : "";
+
+  const stateBlock = config.additionalContext
+    ? `\n\nCurrent state:\n${config.additionalContext}`
+    : "";
+
+  return {
+    system: config.systemPrompt,
+    prompt: `${JSON.stringify(config.task.payload)}${memoryBlock}${stateBlock}`,
+    estimatedTokens: Math.ceil(
+      (config.systemPrompt.length + memoryBlock.length + stateBlock.length) / 4
+    ),
+  };
+}
+```
+
+#### Reflect-Before-Reset Pattern (Stateful Agents)
+
+For agents with multi-step lifecycles (primarily the PM agent), context resets at each
+state boundary. Before discarding context, the agent runs a **structured reflection** to
+extract insights worth preserving in Mem0. The next state transition starts fresh but
+retrieves relevant memories — including reflections from previous transitions.
+
+This creates a learning loop: agents improve over time while keeping context windows small.
+
+**Lifecycle of a state transition:**
+
+1. Load system prompt + structured task state (from Dapr state store)
+2. Retrieve scoped memories from Mem0 for *this* transition type
+3. Execute the transition (tool calls, reasoning, decision)
+4. **Structured reflection** → selective Mem0 storage
+5. Update Dapr state with transition result
+6. Context dies — next transition starts fresh
+
+**Reflection prompt (structured, not open-ended):**
+
+```typescript
+// packages/core/src/context.ts
+
+export const REFLECTION_PROMPT = `
+Before this transition completes, reflect on what happened:
+
+1. OUTCOME: What happened and why?
+2. PATTERN: Is this similar to something that's happened before?
+3. GUIDANCE: What should the next state know that isn't in the structured task data?
+4. REUSABLE: Is there anything here that applies beyond this specific task?
+
+Only store memories that have future value. Not everything is worth remembering.
+Respond with JSON: { "memories": [{ "content": "...", "scope": "task" | "agent" | "global" }] }
+If nothing is worth remembering, respond with: { "memories": [] }
+`;
+```
+
+**`transitionClose` utility:**
+
+```typescript
+// packages/core/src/context.ts
+
+export interface TransitionCloseConfig {
+  agentId: string;
+  taskId: string;
+  transitionFrom: string;    // e.g., "VALIDATE"
+  transitionTo: string;      // e.g., "ACCEPTED"
+  conversationHistory: Array<{ role: string; content: string }>;
+  taskState: Record<string, unknown>;
+}
+
+export async function transitionClose(
+  config: TransitionCloseConfig,
+  memory: AgentMemory,
+  llm: any // Vercel AI SDK model instance
+): Promise<void> {
+  const { object } = await generateObject({
+    model: llm,
+    schema: z.object({
+      memories: z.array(z.object({
+        content: z.string(),
+        scope: z.enum(["task", "agent", "global"]),
+      })),
+    }),
+    system: `You are reflecting on a state transition in a project management workflow.
+             Transition: ${config.transitionFrom} → ${config.transitionTo}
+             Task ID: ${config.taskId}`,
+    prompt: REFLECTION_PROMPT,
+    // Include abbreviated conversation history for reflection
+    messages: config.conversationHistory.slice(-6), // Last 6 messages max
+  });
+
+  // Store each reflection with appropriate scoping
+  for (const mem of object.memories) {
+    const prefix = mem.scope === "global"
+      ? "mesh-six-learning"
+      : mem.scope === "agent"
+        ? config.agentId
+        : `task-${config.taskId}`;
+
+    await memory.store([
+      { role: "system", content: `[${config.transitionFrom}→${config.transitionTo}] ${mem.content}` },
+    ], prefix);
+  }
+}
+```
+
+**Memory scoping:**
+
+| Scope | Stored As | Retrieved By |
+|-------|-----------|-------------|
+| `task` | `task-{taskId}` | Same task's future transitions |
+| `agent` | `{agentId}` | Same agent type across all tasks |
+| `global` | `mesh-six-learning` | Any agent (cross-pollination) |
+
+The `global` scope is how the PM's deployment learnings reach the Architect agent.
+Example: PM reflects "Go services in this cluster use /healthz not /health" → stored globally
+→ Architect retrieves it when recommending health check configuration for future Go services.
+
 ### Testing Strategy
 
 - Unit tests: Agent logic, scoring algorithm, registry operations
@@ -1216,6 +1419,7 @@ mesh-six/
 │       │   ├── types.ts         # Shared type definitions
 │       │   ├── registry.ts      # Agent registry (Dapr state)
 │       │   ├── scoring.ts       # Agent scoring logic
+│       │   ├── context.ts       # Context builder + reflect-before-reset
 │       │   └── memory.ts        # Mem0 client wrapper
 │       ├── package.json
 │       └── tsconfig.json
@@ -1335,4 +1539,4 @@ Milestones are designed to be completed in order. Each builds on the infrastruct
 
 *Document created: February 10, 2026*
 *Architecture designed through iterative discussion between Jay and Claude*
-*Last updated: Milestone plan v1.0*
+*Last updated: v1.1 — renamed to Mesh Six, added context management pattern*
