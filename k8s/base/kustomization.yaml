@@ -21,6 +21,7 @@ resources:
   - infra-manager/
   - cost-tracker/
   - dashboard/
+  - event-logger/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

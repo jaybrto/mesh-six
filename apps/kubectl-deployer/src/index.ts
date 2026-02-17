@@ -1,12 +1,15 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { generateText, generateObject, tool } from "ai";
+import { generateObject, tool } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
+import { Pool } from "pg";
 import {
   AgentRegistry,
   AgentMemory,
   createAgentMemoryFromEnv,
+  EventLog,
+  tracedGenerateText,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -23,6 +26,7 @@ const APP_PORT = Number(process.env.APP_PORT) || 3000;
 const DAPR_HOST = process.env.DAPR_HOST || "localhost";
 const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
 const MEMORY_ENABLED = process.env.MEMORY_ENABLED !== "false";
+const DATABASE_URL = process.env.DATABASE_URL || process.env.PG_PRIMARY_URL || "";
 
 // LLM Configuration
 const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || "http://litellm.litellm:4000/v1";
@@ -45,6 +49,14 @@ const registry = new AgentRegistry(daprClient);
 
 // --- Memory Layer ---
 let memory: AgentMemory | null = null;
+
+// --- Event Log ---
+let eventLog: EventLog | null = null;
+if (DATABASE_URL) {
+  const pool = new Pool({ connectionString: DATABASE_URL });
+  eventLog = new EventLog(pool);
+  console.log(`[${AGENT_ID}] Event log initialized`);
+}
 
 // --- kubectl Helper ---
 async function kubectl(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -861,10 +873,12 @@ async function handleDebugRequest(
   }
 
   // Step 1: Gather information using tools
-  const { text: analysis } = await generateText({
-    model: llm(LLM_MODEL),
-    system: enhancedPrompt,
-    prompt: `Debug the following Kubernetes issue:
+  const traceId = crypto.randomUUID();
+  const { text: analysis } = await tracedGenerateText(
+    {
+      model: llm(LLM_MODEL),
+      system: enhancedPrompt,
+      prompt: `Debug the following Kubernetes issue:
 Namespace: ${namespace}
 Resource: ${resource}
 Name: ${name || "not specified"}
@@ -877,9 +891,11 @@ Investigate by:
 4. Describing resources that have issues
 
 Provide a thorough analysis.`,
-    tools,
-    maxSteps: 8,
-  });
+      tools,
+      maxSteps: 8,
+    },
+    eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
+  );
 
   // Step 2: Generate structured result
   const { object } = await generateObject({

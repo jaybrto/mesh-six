@@ -63,7 +63,7 @@
     },
     "apps/claude-mqtt-bridge": {
       "name": "@mesh-six/claude-mqtt-bridge",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "claude-mqtt-bridge": "./dist/index.js",
       },
@@ -109,6 +109,20 @@
         "tailwindcss": "^4.0.0",
         "typescript": "^5.7.3",
         "vite": "^6.1.0",
+      },
+    },
+    "apps/event-logger": {
+      "name": "@mesh-six/event-logger",
+      "version": "0.1.0",
+      "dependencies": {
+        "@mesh-six/core": "workspace:*",
+        "hono": "^4.7.0",
+        "pg": "^8.13.1",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "@types/pg": "^8.11.11",
+        "typescript": "^5.7.3",
       },
     },
     "apps/homelab-monitor": {
@@ -470,6 +484,8 @@
     "@mesh-six/cost-tracker": ["@mesh-six/cost-tracker@workspace:apps/cost-tracker"],
 
     "@mesh-six/dashboard": ["@mesh-six/dashboard@workspace:apps/dashboard"],
+
+    "@mesh-six/event-logger": ["@mesh-six/event-logger@workspace:apps/event-logger"],
 
     "@mesh-six/homelab-monitor": ["@mesh-six/homelab-monitor@workspace:apps/homelab-monitor"],
 

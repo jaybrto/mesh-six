@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Event Log Module
+- **@mesh-six/core@0.4.0**: Immutable event log and traced LLM wrappers
+  - `EventLog` class (`events.ts`): append-only event store with `emit()`, `emitBatch()`, `query()`, `replay()` methods
+  - `MeshEvent` and `EventQueryOpts` interfaces for structured event data
+  - `tracedGenerateText()` wrapper (`ai.ts`): instruments Vercel AI SDK `generateText` with `llm.call` and `llm.response` events
+  - `TraceContext` interface for passing event log context through agent calls
+  - Graceful degradation: agents skip event logging when DATABASE_URL is not set
+  - 15 new tests (events.test.ts + ai.test.ts), total suite now 85 tests
+- **@mesh-six/event-logger@0.1.0**: Standalone pub/sub event tap service
+  - Subscribes to `task-results` and `task-progress` Dapr pub/sub topics
+  - Writes events to `mesh_six_events` partitioned table via EventLog
+  - Health/readiness endpoints, no LLM or memory dependencies
+  - K8s manifests in `k8s/base/event-logger/`
+- **migrations/003_mesh_six_events.sql**: Partitioned event store table
+  - Monthly partitions (2026-02 through 2026-04)
+  - Indexes on trace_id, task_id, agent_id+event_type, aggregate_id, idempotency_key (unique)
+- **All 11 LLM agents migrated** from direct `generateText` to `tracedGenerateText`
+  - simple-agent, architect-agent, researcher-agent, qa-tester, api-coder, ui-agent, infra-manager
+  - cost-tracker, homelab-monitor, argocd-deployer, kubectl-deployer
+  - orchestrator: emits task.dispatched, task.timeout, task.retry events via EventLog
+  - project-manager: Pool + EventLog initialization (no generateText calls to migrate)
+
 ### Changed - Claude MQTT Bridge: Local SQLite Storage
 - **@mesh-six/claude-mqtt-bridge@0.2.0**: SQLite local event storage
   - All hook events now stored to `$CLAUDE_PROJECT_DIR/.claude/claude-events.db` via `bun:sqlite` (zero deps)

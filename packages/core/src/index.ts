@@ -46,3 +46,16 @@ export {
 export const DAPR_PUBSUB_NAME = "agent-pubsub";
 export const DAPR_STATE_STORE = "agent-statestore";
 export const TASK_RESULTS_TOPIC = "task-results";
+
+// Event Log
+export {
+  EventLog,
+  type MeshEvent,
+  type EventQueryOpts,
+} from "./events.js";
+
+// Traced AI
+export {
+  tracedGenerateText,
+  type TraceContext,
+} from "./ai.js";

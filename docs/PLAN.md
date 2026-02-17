@@ -1549,13 +1549,13 @@ dispatched → result.
 
 ### Event Log Acceptance Criteria
 
-- [ ] `mesh_six_events` table created with monthly partitions
-- [ ] Partition auto-creation script/cron (creates 3 months ahead)
-- [ ] `EventLog` class in `@mesh-six/core` with emit, emitBatch, query, replay
-- [ ] `tracedGenerateText` wrapper in `@mesh-six/core/ai`
-- [ ] `event-logger` service deployed, subscribing to all pub/sub topics
-- [ ] Events queryable by trace_id, task_id, agent_id, event_type, time range
-- [ ] Existing agents migrated from `generateText` to `tracedGenerateText`
+- [x] `mesh_six_events` table created with monthly partitions
+- [x] Partition auto-creation script/cron (creates 3 months ahead)
+- [x] `EventLog` class in `@mesh-six/core` with emit, emitBatch, query, replay
+- [x] `tracedGenerateText` wrapper in `@mesh-six/core/ai`
+- [x] `event-logger` service deployed, subscribing to all pub/sub topics
+- [x] Events queryable by trace_id, task_id, agent_id, event_type, time range
+- [x] Existing agents migrated from `generateText` to `tracedGenerateText`
 - [ ] Events visible in Grafana (Loki or direct PostgreSQL datasource)
 
 ---

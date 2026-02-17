@@ -1,12 +1,15 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { generateText, tool } from "ai";
+import { tool } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
+import { Pool } from "pg";
 import {
   AgentRegistry,
   AgentMemory,
   createAgentMemoryFromEnv,
+  EventLog,
+  tracedGenerateText,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -26,6 +29,7 @@ const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || "http://litellm.litellm
 const LITELLM_API_KEY = process.env.LITELLM_API_KEY || "sk-local";
 const LLM_MODEL = process.env.LLM_MODEL || "anthropic/claude-sonnet-4-20250514";
 const MEMORY_ENABLED = process.env.MEMORY_ENABLED !== "false";
+const DATABASE_URL = process.env.DATABASE_URL || process.env.PG_PRIMARY_URL || "";
 
 // Monitoring service endpoints
 const GRAFANA_URL = process.env.GRAFANA_URL || "http://grafana.monitoring:3000";
@@ -44,6 +48,14 @@ const registry = new AgentRegistry(daprClient);
 
 // --- Memory Layer ---
 let memory: AgentMemory | null = null;
+
+// --- Event Log ---
+let eventLog: EventLog | null = null;
+if (DATABASE_URL) {
+  const pool = new Pool({ connectionString: DATABASE_URL });
+  eventLog = new EventLog(pool);
+  console.log(`[${AGENT_ID}] Event log initialized`);
+}
 
 // --- Agent Registration ---
 const REGISTRATION: AgentRegistration = {
@@ -378,13 +390,11 @@ async function handleTask(task: TaskRequest): Promise<TaskResult> {
   }
 
   // Generate response with tool use
-  const { text } = await generateText({
-    model: llm(LLM_MODEL),
-    system: systemPrompt,
-    prompt: query,
-    tools,
-    maxSteps: 8,
-  });
+  const traceId = crypto.randomUUID();
+  const { text } = await tracedGenerateText(
+    { model: llm(LLM_MODEL), system: systemPrompt, prompt: query, tools, maxSteps: 8 },
+    eventLog ? { eventLog, traceId, agentId: AGENT_ID, taskId: task.id } : null
+  );
 
   // Store in memory
   if (memory) {

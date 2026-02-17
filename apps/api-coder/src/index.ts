@@ -1,12 +1,15 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { generateText, generateObject, tool } from "ai";
+import { generateObject, tool } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
+import { Pool } from "pg";
 import {
   AgentRegistry,
   AgentMemory,
   createAgentMemoryFromEnv,
+  EventLog,
+  tracedGenerateText,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -23,6 +26,7 @@ const APP_PORT = Number(process.env.APP_PORT) || 3000;
 const DAPR_HOST = process.env.DAPR_HOST || "localhost";
 const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
 const MEMORY_ENABLED = process.env.MEMORY_ENABLED !== "false";
+const DATABASE_URL = process.env.DATABASE_URL || process.env.PG_PRIMARY_URL || "";
 
 // LLM Configuration
 const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || "http://litellm.litellm:4000/v1";
@@ -41,6 +45,14 @@ const registry = new AgentRegistry(daprClient);
 
 // --- Memory Layer ---
 let memory: AgentMemory | null = null;
+
+// --- Event Log ---
+let eventLog: EventLog | null = null;
+if (DATABASE_URL) {
+  const pool = new Pool({ connectionString: DATABASE_URL });
+  eventLog = new EventLog(pool);
+  console.log(`[${AGENT_ID}] Event log initialized`);
+}
 
 // --- Structured Output Schemas ---
 export const APIDesignSchema = z.object({
@@ -505,16 +517,14 @@ async function handleCodeRequest(request: APICoderRequest): Promise<APIDesign | 
   const contextPrompt = `\n\n## Context\n${contextParts.join("\n\n")}`;
 
   let result: APIDesign | CodeGeneration | CodeReview | string;
+  const traceId = crypto.randomUUID();
 
   switch (request.action) {
     case "design-api": {
-      const { text: analysis } = await generateText({
-        model: llm(LLM_MODEL),
-        system: enhancedPrompt,
-        prompt: `Design a RESTful API based on these requirements.${contextPrompt}`,
-        tools,
-        maxSteps: 3,
-      });
+      const { text: analysis } = await tracedGenerateText(
+        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `Design a RESTful API based on these requirements.${contextPrompt}`, tools, maxSteps: 3 },
+        eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
+      );
 
       const { object } = await generateObject({
         model: llm(LLM_MODEL),
@@ -527,13 +537,10 @@ async function handleCodeRequest(request: APICoderRequest): Promise<APIDesign | 
     }
 
     case "generate-code": {
-      const { text: analysis } = await generateText({
-        model: llm(LLM_MODEL),
-        system: enhancedPrompt,
-        prompt: `Generate backend API code for these requirements.${contextPrompt}`,
-        tools,
-        maxSteps: 3,
-      });
+      const { text: analysis } = await tracedGenerateText(
+        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `Generate backend API code for these requirements.${contextPrompt}`, tools, maxSteps: 3 },
+        eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
+      );
 
       const { object } = await generateObject({
         model: llm(LLM_MODEL),
@@ -546,13 +553,10 @@ async function handleCodeRequest(request: APICoderRequest): Promise<APIDesign | 
     }
 
     case "review-code": {
-      const { text: analysis } = await generateText({
-        model: llm(LLM_MODEL),
-        system: enhancedPrompt,
-        prompt: `Review this code for quality, security, and best practices.${contextPrompt}`,
-        tools,
-        maxSteps: 3,
-      });
+      const { text: analysis } = await tracedGenerateText(
+        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `Review this code for quality, security, and best practices.${contextPrompt}`, tools, maxSteps: 3 },
+        eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
+      );
 
       const { object } = await generateObject({
         model: llm(LLM_MODEL),
@@ -565,13 +569,10 @@ async function handleCodeRequest(request: APICoderRequest): Promise<APIDesign | 
     }
 
     default: {
-      const { text } = await generateText({
-        model: llm(LLM_MODEL),
-        system: enhancedPrompt,
-        prompt: `${request.action}:${contextPrompt}`,
-        tools,
-        maxSteps: 3,
-      });
+      const { text } = await tracedGenerateText(
+        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `${request.action}:${contextPrompt}`, tools, maxSteps: 3 },
+        eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
+      );
       result = text;
     }
   }

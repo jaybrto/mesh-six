@@ -1,14 +1,17 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { generateText, generateObject, tool } from "ai";
+import { generateObject, tool } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
+import { Pool } from "pg";
 import {
   AgentRegistry,
   AgentMemory,
   createAgentMemoryFromEnv,
+  EventLog,
+  tracedGenerateText,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -25,6 +28,7 @@ const APP_PORT = Number(process.env.APP_PORT) || 3000;
 const DAPR_HOST = process.env.DAPR_HOST || "localhost";
 const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
 const MEMORY_ENABLED = process.env.MEMORY_ENABLED !== "false";
+const DATABASE_URL = process.env.DATABASE_URL || process.env.PG_PRIMARY_URL || "";
 
 // LLM Provider Configuration
 const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || "http://litellm.litellm:4000/v1";
@@ -95,6 +99,14 @@ const registry = new AgentRegistry(daprClient);
 
 // --- Memory Layer ---
 let memory: AgentMemory | null = null;
+
+// --- Event Log ---
+let eventLog: EventLog | null = null;
+if (DATABASE_URL) {
+  const pool = new Pool({ connectionString: DATABASE_URL });
+  eventLog = new EventLog(pool);
+  console.log(`[${AGENT_ID}] Event log initialized`);
+}
 
 // --- Structured Output Schemas ---
 export const ResearchResultSchema = z.object({
@@ -539,18 +551,24 @@ async function handleResearch(request: ResearchRequest): Promise<ResearchResult 
   }
 
   let result: ResearchResult | string;
+  const traceId = crypto.randomUUID();
+
+  const traceCtx = eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null;
 
   if (requireStructured) {
     // Step 1: Gather information with tools
-    const { text: researchAnalysis } = await generateText({
-      model,
-      system: enhancedPrompt,
-      prompt: `Research this topic thoroughly using available tools. Depth: ${depth}
+    const { text: researchAnalysis } = await tracedGenerateText(
+      {
+        model,
+        system: enhancedPrompt,
+        prompt: `Research this topic thoroughly using available tools. Depth: ${depth}
 
 Topic: ${query}`,
-      tools,
-      maxSteps: depth === "comprehensive" ? 8 : depth === "quick" ? 3 : 5,
-    });
+        tools,
+        maxSteps: depth === "comprehensive" ? 8 : depth === "quick" ? 3 : 5,
+      },
+      traceCtx
+    );
 
     // Step 2: Generate structured output
     const { object } = await generateObject({
@@ -578,13 +596,16 @@ Research Type: ${type}`,
     result = object;
   } else {
     // Generate free-form research with tools
-    const { text } = await generateText({
-      model,
-      system: enhancedPrompt,
-      prompt: `Research this topic: ${query}`,
-      tools,
-      maxSteps: depth === "comprehensive" ? 8 : depth === "quick" ? 3 : 5,
-    });
+    const { text } = await tracedGenerateText(
+      {
+        model,
+        system: enhancedPrompt,
+        prompt: `Research this topic: ${query}`,
+        tools,
+        maxSteps: depth === "comprehensive" ? 8 : depth === "quick" ? 3 : 5,
+      },
+      traceCtx
+    );
 
     result = text;
   }

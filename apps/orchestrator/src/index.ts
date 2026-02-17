@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   AgentRegistry,
   AgentScorer,
+  EventLog,
   TaskResultSchema,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
@@ -27,6 +28,7 @@ const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_POR
 const pool = new Pool({ connectionString: DATABASE_URL });
 const registry = new AgentRegistry(daprClient);
 const scorer = new AgentScorer(pool);
+const eventLog = new EventLog(pool);
 
 // --- In-flight task tracking ---
 const activeTasks = new Map<string, TaskStatus & { timeoutId: Timer }>();
@@ -103,6 +105,20 @@ app.post("/tasks", async (c) => {
     `tasks.${bestAgent.agentId}`,
     task
   );
+
+  // Emit dispatch event
+  await eventLog.emit({
+    traceId: task.id,
+    taskId: task.id,
+    agentId: APP_ID,
+    eventType: "task.dispatched",
+    payload: {
+      capability,
+      dispatchedTo: bestAgent.agentId,
+      score: bestAgent.finalScore,
+      priority,
+    },
+  }).catch((err) => console.warn("[Orchestrator] Failed to emit dispatch event:", err));
 
   // Track task with timeout
   const timeoutId = setTimeout(() => handleTimeout(task.id), timeout * 1000);
@@ -206,6 +222,19 @@ async function handleTimeout(taskId: string): Promise<void> {
 
   console.warn(`[Orchestrator] Task ${taskId} timed out`);
 
+  // Emit timeout event
+  await eventLog.emit({
+    traceId: taskId,
+    taskId: taskId,
+    agentId: APP_ID,
+    eventType: "task.timeout",
+    payload: {
+      dispatchedTo: taskStatus.dispatchedTo,
+      capability: taskStatus.capability,
+      attempts: taskStatus.attempts,
+    },
+  }).catch((err) => console.warn("[Orchestrator] Failed to emit timeout event:", err));
+
   // Record failure
   const failResult: TaskResult = {
     taskId,
@@ -257,6 +286,20 @@ async function retryTask(taskStatus: TaskStatus & { timeoutId: Timer }): Promise
   console.log(
     `[Orchestrator] Retrying task ${taskStatus.taskId} to ${bestAgent.agentId} (attempt ${taskStatus.attempts})`
   );
+
+  // Emit retry event
+  await eventLog.emit({
+    traceId: taskStatus.taskId,
+    taskId: taskStatus.taskId,
+    agentId: APP_ID,
+    eventType: "task.retry",
+    payload: {
+      capability: taskStatus.capability,
+      attempt: taskStatus.attempts,
+      newAgent: bestAgent.agentId,
+      score: bestAgent.finalScore,
+    },
+  }).catch((err) => console.warn("[Orchestrator] Failed to emit retry event:", err));
 
   // Re-dispatch
   await daprClient.pubsub.publish(DAPR_PUBSUB_NAME, `tasks.${bestAgent.agentId}`, {
