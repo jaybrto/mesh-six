@@ -14,6 +14,13 @@ export {
   type TaskStatus,
   type DaprPubSubMessage,
   type DaprSubscription,
+  BoardEventBase,
+  NewTodoEvent,
+  CardBlockedEvent,
+  CardUnblockedEvent,
+  CardMovedEvent,
+  BoardEvent,
+  type BoardEventType,
 } from "./types.js";
 
 // Registry
@@ -41,6 +48,16 @@ export {
   type MemoryScope,
   type TransitionCloseConfig,
 } from "./context.js";
+
+// GitHub Projects
+export {
+  GitHubProjectClient,
+  type GitHubClientConfig,
+  type ColumnMapping,
+  type ProjectItem,
+  type IssueComment,
+  type LinkedPR,
+} from "./github.js";
 
 // Constants
 export const DAPR_PUBSUB_NAME = "agent-pubsub";

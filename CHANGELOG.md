@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - Milestone 4.5: GWA Integration (PM Agent ↔ GitHub Workflow Agents)
+
+#### New Service: Webhook Receiver
+- **@mesh-six/webhook-receiver@0.1.0**: GitHub Projects board event bridge
+  - `POST /webhooks/github` — HMAC-SHA256 validation, `projects_v2_item` event parsing
+  - Classifies column transitions into typed BoardEvents: `new-todo`, `card-blocked`, `card-unblocked`, `card-moved`
+  - Publishes events to Dapr `agent-pubsub` topic `board-events`
+  - Dedup by `X-GitHub-Delivery` header (1-hour TTL)
+  - 3-minute polling safety net via GitHub Projects GraphQL API for missed Todo items
+  - Self-move filtering via Dapr state store `pending-moves:{itemId}` keys
+  - Health/readiness endpoints, Dapr subscription endpoints
+
+#### PM Workflow Rewrite
+- **@mesh-six/project-manager@0.3.0**: Board-driven Dapr Workflow with GitHub API polling
+  - New workflow states: INTAKE → PLANNING → IMPLEMENTATION → QA → REVIEW → ACCEPTED/FAILED
+  - 18 typed activities (vs 6 in M4): consultArchitect, enrichIssue, moveCard, recordPendingMove, pollForPlan, pollForImplementation, pollForTestResults, reviewPlan, evaluateTestResults, waitForDeployment, validateDeployment, addComment, createBugIssue, notifyBlocked, notifyTimeout, recordWorkflowMapping, reportSuccess, moveToFailed
+  - `pollGithubForCompletion()` generic polling helper with deadline + blocked detection
+  - Bounded retry loops: max 3 plan revision cycles, max 3 QA cycles
+  - External event handling for `card-blocked`/`card-unblocked`/`qa-ready` via Dapr Workflow
+  - ntfy.sh push notifications on blocked/timeout states
+  - `POST /board-events` handler: starts workflows on `new-todo`, raises external events on blocked/unblocked
+  - `pm_workflow_instances` PostgreSQL table for issue↔workflow mapping
+
+#### Core Library
+- **@mesh-six/core@0.5.0**: Board event types and GitHub Projects client
+  - `BoardEvent` Zod discriminated union: `NewTodoEvent`, `CardBlockedEvent`, `CardUnblockedEvent`, `CardMovedEvent`
+  - `GitHubProjectClient` class (`github.ts`): GitHub Projects v2 GraphQL + REST operations
+    - `loadColumnMapping()`, `moveCard()`, `getItemColumn()`, `getProjectItemsByColumn()`
+    - `getIssueComments()`, `getIssuePRs()`, `addIssueComment()`, `createIssue()`
+  - Added `@octokit/graphql` and `@octokit/rest` dependencies
+
+#### Database
+- **migrations/004_pm_workflow_instances.sql**: Workflow instance tracking table
+  - Tracks issue↔workflow mapping with `issue_number`, `workflow_id`, `current_phase`, `status`
+  - Unique constraint on `(issue_number, repo_owner, repo_name)` for dedup
+  - Indexes on `(status, current_phase)` and `(repo_owner, repo_name, issue_number)`
+
+#### Infrastructure
+- K8s manifests for webhook-receiver (Deployment + Service with Dapr sidecar)
+- Added webhook-receiver to `k8s/base/kustomization.yaml`
+
+### Fixed
+- **migrations/003_mesh_six_events.sql**: Fixed unique index on partitioned table to include partition column `timestamp`
+
 ### Added - Event Log Module
 - **@mesh-six/core@0.4.0**: Immutable event log and traced LLM wrappers
   - `EventLog` class (`events.ts`): append-only event store with `emit()`, `emitBatch()`, `query()`, `replay()` methods

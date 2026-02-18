@@ -49,6 +49,10 @@ jobs:
             architect-agent
             argocd-deployer
             claude-mqtt-bridge
+            cost-tracker
+            event-logger
+            homelab-monitor
+            infra-manager
             kubectl-deployer
             orchestrator
             project-manager
@@ -56,6 +60,7 @@ jobs:
             researcher-agent
             simple-agent
             ui-agent
+            webhook-receiver
           )
 
           for agent in "${BUILDABLE_AGENTS[@]}"; do

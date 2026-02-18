@@ -1,6 +1,7 @@
 {
-  "name": "@mesh-six/project-manager",
-  "version": "0.3.0",
+  "name": "@mesh-six/webhook-receiver",
+  "version": "0.1.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
@@ -12,12 +13,7 @@
   "dependencies": {
     "@mesh-six/core": "workspace:*",
     "@dapr/dapr": "^3.4.2",
-    "@octokit/graphql": "^8.2.1",
-    "@ai-sdk/openai": "^1.2.0",
-    "@octokit/rest": "^21.0.0",
-    "ai": "^4.1.52",
     "hono": "^4.7.4",
-    "mqtt": "^5.10.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {

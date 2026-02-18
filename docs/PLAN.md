@@ -16,11 +16,12 @@
 6. [Milestone 2 — Memory Layer](#milestone-2--memory-layer)
 7. [Milestone 3 — Specialist Agents](#milestone-3--specialist-agents)
 8. [Milestone 4 — Project Manager Agent](#milestone-4--project-manager-agent)
-9. [Milestone 5 — Infrastructure Agents](#milestone-5--infrastructure-agents)
-10. [Event Log — Standalone Module](#event-log--standalone-module)
-11. [Cross-Cutting Concerns](#cross-cutting-concerns)
-12. [Repository Structure](#repository-structure)
-13. [Deployment Strategy](#deployment-strategy)
+9. [Milestone 4.5 — GWA Integration](#milestone-45--gwa-integration-pm-agent--github-workflow-agents)
+10. [Milestone 5 — Infrastructure Agents](#milestone-5--infrastructure-agents)
+11. [Event Log — Standalone Module](#event-log--standalone-module)
+12. [Cross-Cutting Concerns](#cross-cutting-concerns)
+13. [Repository Structure](#repository-structure)
+14. [Deployment Strategy](#deployment-strategy)
 
 ---
 
@@ -1197,6 +1198,51 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 **Remaining Work:**
 - Deploy to k8s and run full task lifecycle end-to-end
 - Test Claude MQTT Bridge in production environment
+
+---
+
+## Milestone 4.5 — GWA Integration (PM Agent ↔ GitHub Workflow Agents)
+
+**Goal**: Integrate the PM agent with GitHub Workflow Agents (GWA) using GitHub Projects board as the sole integration surface. PM moves cards through columns, GWA reacts via its own webhook. Zero coupling to GWA internals.
+
+**Status**: Code complete (Phases 1-3). E2E test app and infrastructure deployment deferred to follow-up sessions.
+
+**Key Design Principle**: GitHub Projects is the ONLY integration surface. If GWA were replaced with a human, PM would function identically.
+
+### New Service: Webhook Receiver (`apps/webhook-receiver/`)
+
+Board event bridge that detects GitHub Projects column changes and publishes typed events:
+- HMAC-SHA256 webhook validation for `projects_v2_item` events
+- Classifies transitions: `new-todo`, `card-blocked`, `card-unblocked`, `card-moved`
+- Publishes to Dapr `board-events` topic
+- 3-minute polling safety net for missed Todo items
+- Self-move filtering via Dapr state store pending-moves keys
+
+### PM Workflow Rewrite
+
+Board-driven Dapr Workflow replacing the M4 state machine:
+- States: INTAKE → PLANNING → IMPLEMENTATION → QA → REVIEW → ACCEPTED/FAILED
+- 18 activities covering the full lifecycle (consult architect, enrich issue, move card, poll for plan/implementation/tests, review plan, evaluate tests, validate deployment, notify blocked/timeout, create bug issues)
+- GitHub API polling with 15-second intervals for rate-limit-friendly phase detection
+- Bounded retry loops (max 3 plan cycles, max 3 QA cycles)
+- Blocked state handling via external events + ntfy.sh notifications
+- `pm_workflow_instances` PostgreSQL table for issue↔workflow mapping
+
+### Core Library Additions
+
+- `GitHubProjectClient` class for shared GitHub Projects v2 GraphQL + REST operations
+- `BoardEvent` Zod discriminated union for typed board events
+- `@octokit/graphql` and `@octokit/rest` dependencies
+
+### Remaining Work
+
+- Deploy webhook-receiver + updated PM to k8s cluster
+- Configure Cloudflare tunnel, GitHub webhook, secrets
+- Create `bto-labs/gwa-test-app` test fixture repo
+- Write E2E test (`tests/e2e/full-lifecycle.test.ts`)
+- Run full lifecycle: Todo → Planning → In Progress → QA → Review → Done
+
+Full architecture and acceptance criteria in `docs/PLAN_45_GWA.md`.
 
 ---
 

@@ -1,340 +1,897 @@
 /**
- * Project Manager Workflow Implementation using Dapr Workflow
+ * Project Manager Workflow — Board-Driven State Machine (Milestone 4.5)
  *
- * This module implements a durable state machine for project lifecycle management.
- * Projects survive pod restarts and state transitions are persisted automatically.
+ * Implements the PM lifecycle as a Dapr Workflow driven by GitHub Projects board
+ * column transitions. The PM has zero knowledge of GWA internals — the board
+ * and GitHub API (issues, comments, PRs) are the sole communication channels.
+ *
+ * Board-aligned states:
+ *   INTAKE -> PLANNING -> IMPLEMENTATION -> QA -> REVIEW -> ACCEPTED
+ *                                                         \-> FAILED
+ *
+ * Failure loops (bounded, max 3 cycles):
+ *   PLANNING plan rejected -> stays in PLANNING
+ *   QA tests fail -> back to PLANNING
+ *   REVIEW validation fails -> back to PLANNING
  */
 
 import {
   WorkflowRuntime,
   WorkflowActivityContext,
   WorkflowContext,
-  TWorkflow,
+  type TWorkflow,
   DaprWorkflowClient,
 } from "@dapr/dapr";
-import { z } from "zod";
-import type { Project, ProjectState, ReviewResult } from "./index.js";
 
-// --- Configuration ---
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
 const DAPR_HOST = process.env.DAPR_HOST || "localhost";
 const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
-const WORKFLOW_COMPONENT = "dapr"; // Default workflow component name
 
-// --- Workflow Input Schema ---
-export const WorkflowInputSchema = z.object({
-  title: z.string(),
-  description: z.string(),
-  platform: z.enum(["github", "gitea"]),
-  repoOwner: z.string(),
-  repoName: z.string(),
-  context: z.record(z.string(), z.unknown()).optional(),
-});
-export type WorkflowInput = z.infer<typeof WorkflowInputSchema>;
+// ---------------------------------------------------------------------------
+// Local Types (no imports from ./index.js to avoid circular deps)
+// ---------------------------------------------------------------------------
 
-// --- Workflow State Schema ---
-export const WorkflowStateSchema = z.object({
-  projectId: z.string().uuid(),
-  currentState: z.enum([
-    "CREATE",
-    "PLANNING",
-    "REVIEW",
-    "IN_PROGRESS",
-    "QA",
-    "DEPLOY",
-    "VALIDATE",
-    "ACCEPTED",
-    "FAILED",
-  ]),
-  project: z.any(), // Full Project object
-  stateData: z.record(z.string(), z.unknown()).optional(),
-});
-export type WorkflowState = z.infer<typeof WorkflowStateSchema>;
+/** Board-aligned workflow states */
+export type WorkflowPhase =
+  | "INTAKE"
+  | "PLANNING"
+  | "IMPLEMENTATION"
+  | "QA"
+  | "REVIEW"
+  | "ACCEPTED"
+  | "FAILED";
 
-// --- Activity Input Schemas ---
-export const CreateProjectActivityInput = z.object({
-  title: z.string(),
-  description: z.string(),
-  platform: z.enum(["github", "gitea"]),
-  repoOwner: z.string(),
-  repoName: z.string(),
-  architectGuidance: z.unknown(),
-  context: z.record(z.string(), z.unknown()).optional(),
-});
+/** Input to start a new project workflow */
+export interface ProjectWorkflowInput {
+  issueNumber: number;
+  issueTitle: string;
+  repoOwner: string;
+  repoName: string;
+  projectItemId: string;
+  contentNodeId: string;
+}
 
-export const EvaluateGateActivityInput = z.object({
-  project: z.any(),
-  gateType: z.enum(["plan", "qa", "deployment"]),
-  context: z.record(z.string(), z.unknown()),
-});
+/** Result returned when the workflow completes */
+export interface ProjectWorkflowResult {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  finalPhase: WorkflowPhase;
+  prNumber?: number;
+}
 
-export const TransitionStateActivityInput = z.object({
-  project: z.any(),
-  newState: z.enum([
-    "CREATE",
-    "PLANNING",
-    "REVIEW",
-    "IN_PROGRESS",
-    "QA",
-    "DEPLOY",
-    "VALIDATE",
-    "ACCEPTED",
-    "FAILED",
-  ]),
-  reason: z.string().optional(),
-});
+// --- Activity input/output types ---
 
-export const AddCommentActivityInput = z.object({
-  platform: z.enum(["github", "gitea"]),
-  repoOwner: z.string(),
-  repoName: z.string(),
-  issueNumber: z.number(),
-  body: z.string(),
-});
+export interface ConsultArchitectInput {
+  question: string;
+}
 
-export const ConsultArchitectActivityInput = z.object({
-  question: z.string(),
-});
+export interface ConsultArchitectOutput {
+  guidance: string;
+  fallback: boolean;
+}
 
-export const RequestResearchActivityInput = z.object({
-  query: z.string(),
-  type: z.string().default("technical-research"),
-});
+export interface EnrichIssueInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  guidance: string;
+  acceptanceCriteria: string;
+}
 
-// --- Activity Function Types ---
-export type ActivityFunction<TInput = unknown, TOutput = unknown> = (
+export interface RecordPendingMoveInput {
+  projectItemId: string;
+  toColumn: string;
+}
+
+export interface MoveCardInput {
+  projectItemId: string;
+  toColumn: string;
+}
+
+export interface RecordWorkflowMappingInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  workflowId: string;
+  projectItemId: string;
+}
+
+export interface PollForPlanInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  projectItemId: string;
+  timeoutMinutes: number;
+}
+
+export interface PollForPlanOutput {
+  planContent: string;
+  timedOut: boolean;
+  blocked: boolean;
+}
+
+export interface ReviewPlanInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  planContent: string;
+}
+
+export interface ReviewPlanOutput {
+  approved: boolean;
+  feedback: string;
+  confidence: number;
+}
+
+export interface AddCommentInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  body: string;
+}
+
+export interface PollForImplementationInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  projectItemId: string;
+  timeoutMinutes: number;
+}
+
+export interface PollForImplementationOutput {
+  prNumber: number | null;
+  timedOut: boolean;
+  blocked: boolean;
+}
+
+export interface PollForTestResultsInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  projectItemId: string;
+  timeoutMinutes: number;
+}
+
+export interface PollForTestResultsOutput {
+  testContent: string;
+  timedOut: boolean;
+  blocked: boolean;
+}
+
+export interface EvaluateTestResultsInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  testContent: string;
+}
+
+export interface EvaluateTestResultsOutput {
+  passed: boolean;
+  failures: string[];
+}
+
+export interface WaitForDeploymentInput {
+  repoOwner: string;
+  repoName: string;
+  healthUrl: string;
+  timeoutMinutes: number;
+}
+
+export interface WaitForDeploymentOutput {
+  healthy: boolean;
+  timedOut: boolean;
+}
+
+export interface ValidateDeploymentInput {
+  repoOwner: string;
+  repoName: string;
+  healthUrl: string;
+}
+
+export interface ValidateDeploymentOutput {
+  passed: boolean;
+  failures: string[];
+}
+
+export interface CreateBugIssueInput {
+  repoOwner: string;
+  repoName: string;
+  parentIssueNumber: number;
+  failures: string[];
+}
+
+export interface CreateBugIssueOutput {
+  issueNumber: number;
+  url: string;
+}
+
+export interface NotifyBlockedInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  question: string;
+  ntfyTopic: string;
+}
+
+export interface NotifyTimeoutInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  phase: string;
+  ntfyTopic: string;
+}
+
+export interface ReportSuccessInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  projectItemId: string;
+  workflowId: string;
+}
+
+export interface MoveToFailedInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  projectItemId: string;
+  workflowId: string;
+  reason: string;
+}
+
+// ---------------------------------------------------------------------------
+// Activity type alias
+// ---------------------------------------------------------------------------
+
+type ActivityFn<TInput = unknown, TOutput = unknown> = (
   ctx: WorkflowActivityContext,
   input: TInput
 ) => Promise<TOutput>;
 
-// --- External Event Names ---
-export const ADVANCE_EVENT = "advance";
-export const FAIL_EVENT = "fail";
+// ---------------------------------------------------------------------------
+// Activity stub variables (replaced at runtime via createWorkflowRuntime)
+// ---------------------------------------------------------------------------
 
-// --- State Transition Map ---
-const VALID_TRANSITIONS: Record<ProjectState, ProjectState[]> = {
-  CREATE: ["PLANNING"],
-  PLANNING: ["REVIEW"],
-  REVIEW: ["PLANNING", "IN_PROGRESS"],
-  IN_PROGRESS: ["QA"],
-  QA: ["PLANNING", "DEPLOY"],
-  DEPLOY: ["VALIDATE"],
-  VALIDATE: ["PLANNING", "ACCEPTED"],
-  ACCEPTED: [],
-  FAILED: [],
+export let consultArchitectActivity: ActivityFn<
+  ConsultArchitectInput,
+  ConsultArchitectOutput
+> = async () => {
+  throw new Error("consultArchitectActivity not initialized");
 };
 
-/**
- * Main Project Workflow
- *
- * This workflow manages the entire project lifecycle from creation to acceptance.
- * It uses external events to advance through states, enabling manual control.
- */
+export let enrichIssueActivity: ActivityFn<EnrichIssueInput, void> =
+  async () => {
+    throw new Error("enrichIssueActivity not initialized");
+  };
+
+export let recordPendingMoveActivity: ActivityFn<
+  RecordPendingMoveInput,
+  void
+> = async () => {
+  throw new Error("recordPendingMoveActivity not initialized");
+};
+
+export let moveCardActivity: ActivityFn<MoveCardInput, void> = async () => {
+  throw new Error("moveCardActivity not initialized");
+};
+
+export let recordWorkflowMappingActivity: ActivityFn<
+  RecordWorkflowMappingInput,
+  void
+> = async () => {
+  throw new Error("recordWorkflowMappingActivity not initialized");
+};
+
+export let pollForPlanActivity: ActivityFn<
+  PollForPlanInput,
+  PollForPlanOutput
+> = async () => {
+  throw new Error("pollForPlanActivity not initialized");
+};
+
+export let reviewPlanActivity: ActivityFn<
+  ReviewPlanInput,
+  ReviewPlanOutput
+> = async () => {
+  throw new Error("reviewPlanActivity not initialized");
+};
+
+export let addCommentActivity: ActivityFn<AddCommentInput, void> =
+  async () => {
+    throw new Error("addCommentActivity not initialized");
+  };
+
+export let pollForImplementationActivity: ActivityFn<
+  PollForImplementationInput,
+  PollForImplementationOutput
+> = async () => {
+  throw new Error("pollForImplementationActivity not initialized");
+};
+
+export let pollForTestResultsActivity: ActivityFn<
+  PollForTestResultsInput,
+  PollForTestResultsOutput
+> = async () => {
+  throw new Error("pollForTestResultsActivity not initialized");
+};
+
+export let evaluateTestResultsActivity: ActivityFn<
+  EvaluateTestResultsInput,
+  EvaluateTestResultsOutput
+> = async () => {
+  throw new Error("evaluateTestResultsActivity not initialized");
+};
+
+export let waitForDeploymentActivity: ActivityFn<
+  WaitForDeploymentInput,
+  WaitForDeploymentOutput
+> = async () => {
+  throw new Error("waitForDeploymentActivity not initialized");
+};
+
+export let validateDeploymentActivity: ActivityFn<
+  ValidateDeploymentInput,
+  ValidateDeploymentOutput
+> = async () => {
+  throw new Error("validateDeploymentActivity not initialized");
+};
+
+export let createBugIssueActivity: ActivityFn<
+  CreateBugIssueInput,
+  CreateBugIssueOutput
+> = async () => {
+  throw new Error("createBugIssueActivity not initialized");
+};
+
+export let notifyBlockedActivity: ActivityFn<NotifyBlockedInput, void> =
+  async () => {
+    throw new Error("notifyBlockedActivity not initialized");
+  };
+
+export let notifyTimeoutActivity: ActivityFn<NotifyTimeoutInput, void> =
+  async () => {
+    throw new Error("notifyTimeoutActivity not initialized");
+  };
+
+export let reportSuccessActivity: ActivityFn<ReportSuccessInput, void> =
+  async () => {
+    throw new Error("reportSuccessActivity not initialized");
+  };
+
+export let moveToFailedActivity: ActivityFn<MoveToFailedInput, void> =
+  async () => {
+    throw new Error("moveToFailedActivity not initialized");
+  };
+
+// ---------------------------------------------------------------------------
+// Main Workflow
+// ---------------------------------------------------------------------------
+
+const MAX_PLAN_CYCLES = 3;
+const MAX_QA_CYCLES = 3;
+
 export const projectWorkflow: TWorkflow = async function* (
   ctx: WorkflowContext,
-  input: WorkflowInput
+  input: ProjectWorkflowInput
 ): any {
-  console.log(`[Workflow] Starting project workflow: ${input.title}`);
+  const {
+    issueNumber,
+    issueTitle,
+    repoOwner,
+    repoName,
+    projectItemId,
+  } = input;
+  const workflowId = ctx.getWorkflowInstanceId();
 
-  // Step 1: Consult Architect
-  const architectGuidance = yield ctx.callActivity(
-    consultArchitectActivity,
-    { question: `New project request: "${input.title}". Description: ${input.description}. What technical approach do you recommend?` }
+  console.log(
+    `[Workflow] Starting board-driven workflow for issue #${issueNumber}: ${issueTitle}`
   );
 
-  // Step 2: Create Project (CREATE state)
-  const project: Project = yield ctx.callActivity(createProjectActivity, {
-    title: input.title,
-    description: input.description,
-    platform: input.platform,
-    repoOwner: input.repoOwner,
-    repoName: input.repoName,
-    architectGuidance,
-    context: input.context,
+  // =====================================================================
+  // INTAKE phase (card is in Todo)
+  // =====================================================================
+
+  // 1. Consult architect for guidance
+  const architectResult: ConsultArchitectOutput = yield ctx.callActivity(
+    consultArchitectActivity,
+    {
+      question: `New project request: issue #${issueNumber} "${issueTitle}" in ${repoOwner}/${repoName}. What technical approach do you recommend? Include acceptance criteria.`,
+    }
+  );
+
+  // 2. Enrich the issue with architect guidance
+  yield ctx.callActivity(enrichIssueActivity, {
+    issueNumber,
+    repoOwner,
+    repoName,
+    guidance: architectResult.guidance,
+    acceptanceCriteria: architectResult.fallback
+      ? "Acceptance criteria pending architect review."
+      : "See architect guidance above.",
   });
 
-  let currentState: ProjectState = "CREATE";
-  let currentProject = project;
-
-  console.log(`[Workflow] Project created: ${project.id}`);
-
-  // Step 3: Immediately transition to PLANNING
-  currentProject = yield ctx.callActivity(transitionStateActivity, {
-    project: currentProject,
-    newState: "PLANNING",
-    reason: "Initial planning phase started",
+  // 3. Record pending move + move card Todo -> Planning
+  yield ctx.callActivity(recordPendingMoveActivity, {
+    projectItemId,
+    toColumn: "Planning",
   });
-  currentState = "PLANNING";
+  yield ctx.callActivity(moveCardActivity, {
+    projectItemId,
+    toColumn: "Planning",
+  });
 
-  // Main state machine loop
-  // We wait for external signals to advance through states
-  while (currentState !== "ACCEPTED" && currentState !== "FAILED") {
-    console.log(`[Workflow] Project ${project.id} in state: ${currentState}`);
+  // 4. Record workflow mapping in PostgreSQL
+  yield ctx.callActivity(recordWorkflowMappingActivity, {
+    issueNumber,
+    repoOwner,
+    repoName,
+    workflowId,
+    projectItemId,
+  });
 
-    // Wait for advance signal with project-specific context
-    const advanceSignal: {
-      targetState: ProjectState;
-      context?: Record<string, unknown>;
-      reason?: string;
-    } = yield ctx.waitForExternalEvent(ADVANCE_EVENT);
+  console.log(`[Workflow] Issue #${issueNumber} moved to Planning`);
 
-    const { targetState, context: gateContext = {}, reason } = advanceSignal;
+  // =====================================================================
+  // PLANNING phase (card is in Planning)
+  // =====================================================================
 
-    console.log(`[Workflow] Advance signal received: ${currentState} → ${targetState}`);
+  let totalPlanCycles = 0;
+  let planApproved = false;
 
-    // Validate transition
-    if (!VALID_TRANSITIONS[currentState]?.includes(targetState)) {
-      console.warn(
-        `[Workflow] Invalid transition: ${currentState} → ${targetState}. Ignoring.`
-      );
+  while (totalPlanCycles < MAX_PLAN_CYCLES && !planApproved) {
+    totalPlanCycles++;
+    console.log(
+      `[Workflow] Planning cycle ${totalPlanCycles}/${MAX_PLAN_CYCLES} for issue #${issueNumber}`
+    );
+
+    // Poll for Claude to post a plan as an issue comment
+    const planResult: PollForPlanOutput = yield ctx.callActivity(
+      pollForPlanActivity,
+      {
+        issueNumber,
+        repoOwner,
+        repoName,
+        projectItemId,
+        timeoutMinutes: 30,
+      }
+    );
+
+    if (planResult.blocked) {
+      console.log(`[Workflow] Issue #${issueNumber} is blocked during planning`);
+      // Card was moved to Blocked — wait for external unblock event
+      yield ctx.waitForExternalEvent("card-unblocked");
+      console.log(`[Workflow] Issue #${issueNumber} unblocked, resuming planning`);
       continue;
     }
 
-    // Perform review gate evaluation if needed
-    if (["REVIEW", "DEPLOY", "ACCEPTED"].includes(targetState)) {
-      const gateType =
-        targetState === "REVIEW" ? "plan" :
-        targetState === "DEPLOY" ? "qa" : "deployment";
-
-      const review: ReviewResult = yield ctx.callActivity(evaluateGateActivity, {
-        project: currentProject,
-        gateType,
-        context: gateContext,
+    if (planResult.timedOut) {
+      yield ctx.callActivity(notifyTimeoutActivity, {
+        issueNumber,
+        repoOwner,
+        repoName,
+        phase: "planning",
+        ntfyTopic: "mesh-six-pm",
       });
-
-      if (!review.approved) {
-        // Gate failed - add feedback comment
-        if (currentProject.issueNumber) {
-          yield ctx.callActivity(addCommentActivity, {
-            platform: currentProject.platform,
-            repoOwner: currentProject.repoOwner,
-            repoName: currentProject.repoName,
-            issueNumber: currentProject.issueNumber,
-            body: `⚠️ **Review Gate Failed**: ${gateType}
-
-**Concerns:**
-${review.concerns.map((c) => `- ${c}`).join("\n")}
-
-**Suggestions:**
-${review.suggestions.map((s) => `- ${s}`).join("\n")}
-
-**Reasoning:** ${review.reasoning}
-
-*Confidence: ${(review.confidence * 100).toFixed(0)}%*`,
-          });
-        }
-
-        // Don't transition - stay in current state
-        console.log(`[Workflow] Review gate failed for ${gateType}, staying in ${currentState}`);
-        continue;
-      }
+      continue;
     }
 
-    // Perform state transition
-    currentProject = yield ctx.callActivity(transitionStateActivity, {
-      project: currentProject,
-      newState: targetState,
-      reason: reason || `Advanced to ${targetState}`,
-    });
-    currentState = targetState;
+    // Review the plan via LLM
+    const planReview: ReviewPlanOutput = yield ctx.callActivity(
+      reviewPlanActivity,
+      {
+        issueNumber,
+        repoOwner,
+        repoName,
+        planContent: planResult.planContent,
+      }
+    );
 
-    console.log(`[Workflow] Transitioned to ${targetState}`);
+    if (planReview.approved) {
+      planApproved = true;
+      console.log(`[Workflow] Plan approved for issue #${issueNumber}`);
+    } else {
+      // Post feedback so Claude can revise
+      yield ctx.callActivity(addCommentActivity, {
+        issueNumber,
+        repoOwner,
+        repoName,
+        body: `**Plan Review — Revision Needed** (confidence: ${(planReview.confidence * 100).toFixed(0)}%)\n\n${planReview.feedback}`,
+      });
+      console.log(`[Workflow] Plan rejected for issue #${issueNumber}, cycle ${totalPlanCycles}`);
+    }
   }
 
-  console.log(`[Workflow] Project ${project.id} completed in state: ${currentState}`);
+  if (!planApproved) {
+    yield ctx.callActivity(moveToFailedActivity, {
+      issueNumber,
+      repoOwner,
+      repoName,
+      projectItemId,
+      workflowId,
+      reason: `Plan not approved after ${MAX_PLAN_CYCLES} revision cycles`,
+    });
+    return {
+      issueNumber,
+      repoOwner,
+      repoName,
+      finalPhase: "FAILED" as WorkflowPhase,
+    };
+  }
+
+  // Plan approved -> move to In Progress
+  yield ctx.callActivity(recordPendingMoveActivity, {
+    projectItemId,
+    toColumn: "In Progress",
+  });
+  yield ctx.callActivity(moveCardActivity, {
+    projectItemId,
+    toColumn: "In Progress",
+  });
+
+  console.log(`[Workflow] Issue #${issueNumber} moved to In Progress`);
+
+  // =====================================================================
+  // IMPLEMENTATION phase (card is in In Progress)
+  // =====================================================================
+
+  const implResult: PollForImplementationOutput = yield ctx.callActivity(
+    pollForImplementationActivity,
+    {
+      issueNumber,
+      repoOwner,
+      repoName,
+      projectItemId,
+      timeoutMinutes: 60,
+    }
+  );
+
+  if (implResult.blocked) {
+    console.log(`[Workflow] Issue #${issueNumber} blocked during implementation`);
+    yield ctx.waitForExternalEvent("card-unblocked");
+    console.log(`[Workflow] Issue #${issueNumber} unblocked, continuing to QA`);
+  }
+
+  if (implResult.timedOut) {
+    yield ctx.callActivity(notifyTimeoutActivity, {
+      issueNumber,
+      repoOwner,
+      repoName,
+      phase: "implementation",
+      ntfyTopic: "mesh-six-pm",
+    });
+  }
+
+  // Move to QA
+  yield ctx.callActivity(recordPendingMoveActivity, {
+    projectItemId,
+    toColumn: "QA",
+  });
+  yield ctx.callActivity(moveCardActivity, {
+    projectItemId,
+    toColumn: "QA",
+  });
+
+  console.log(`[Workflow] Issue #${issueNumber} moved to QA`);
+
+  // =====================================================================
+  // QA phase (card is in QA)
+  // =====================================================================
+
+  let qaCycles = 0;
+  let qaPassedFinal = false;
+
+  while (qaCycles < MAX_QA_CYCLES && !qaPassedFinal) {
+    qaCycles++;
+    console.log(
+      `[Workflow] QA cycle ${qaCycles}/${MAX_QA_CYCLES} for issue #${issueNumber}`
+    );
+
+    const qaResult: PollForTestResultsOutput = yield ctx.callActivity(
+      pollForTestResultsActivity,
+      {
+        issueNumber,
+        repoOwner,
+        repoName,
+        projectItemId,
+        timeoutMinutes: 15,
+      }
+    );
+
+    if (qaResult.blocked) {
+      console.log(`[Workflow] Issue #${issueNumber} blocked during QA`);
+      yield ctx.waitForExternalEvent("card-unblocked");
+      console.log(`[Workflow] Issue #${issueNumber} unblocked, resuming QA`);
+      continue;
+    }
+
+    if (qaResult.timedOut) {
+      yield ctx.callActivity(notifyTimeoutActivity, {
+        issueNumber,
+        repoOwner,
+        repoName,
+        phase: "qa",
+        ntfyTopic: "mesh-six-pm",
+      });
+      continue;
+    }
+
+    // Evaluate test results via LLM
+    const testEval: EvaluateTestResultsOutput = yield ctx.callActivity(
+      evaluateTestResultsActivity,
+      {
+        issueNumber,
+        repoOwner,
+        repoName,
+        testContent: qaResult.testContent,
+      }
+    );
+
+    if (testEval.passed) {
+      qaPassedFinal = true;
+      console.log(`[Workflow] Tests passed for issue #${issueNumber}`);
+    } else {
+      // Create bug issue and move back to Planning
+      yield ctx.callActivity(createBugIssueActivity, {
+        repoOwner,
+        repoName,
+        parentIssueNumber: issueNumber,
+        failures: testEval.failures,
+      });
+
+      yield ctx.callActivity(recordPendingMoveActivity, {
+        projectItemId,
+        toColumn: "Planning",
+      });
+      yield ctx.callActivity(moveCardActivity, {
+        projectItemId,
+        toColumn: "Planning",
+      });
+
+      console.log(
+        `[Workflow] Tests failed for issue #${issueNumber}, moved back to Planning (cycle ${qaCycles})`
+      );
+
+      // Wait for Claude to fix and produce new test results
+      // (Re-enter QA after Planning -> In Progress -> QA cycle is implicit
+      //  since GWA reacts to column changes. We wait for the card to come back.)
+      if (qaCycles < MAX_QA_CYCLES) {
+        // Wait for the card to be moved back through the pipeline.
+        // The PM will detect the card returning to QA via webhook events.
+        yield ctx.waitForExternalEvent("qa-ready");
+      }
+    }
+  }
+
+  if (!qaPassedFinal) {
+    yield ctx.callActivity(moveToFailedActivity, {
+      issueNumber,
+      repoOwner,
+      repoName,
+      projectItemId,
+      workflowId,
+      reason: `Tests did not pass after ${MAX_QA_CYCLES} QA cycles`,
+    });
+    return {
+      issueNumber,
+      repoOwner,
+      repoName,
+      finalPhase: "FAILED" as WorkflowPhase,
+    };
+  }
+
+  // Tests pass -> move to Review
+  yield ctx.callActivity(recordPendingMoveActivity, {
+    projectItemId,
+    toColumn: "Review",
+  });
+  yield ctx.callActivity(moveCardActivity, {
+    projectItemId,
+    toColumn: "Review",
+  });
+
+  console.log(`[Workflow] Issue #${issueNumber} moved to Review`);
+
+  // =====================================================================
+  // REVIEW phase (card is in Review)
+  // =====================================================================
+
+  // Construct the health URL from repo info
+  // Convention: <repo-name>.bto.bar/healthz
+  const healthUrl = `https://${repoName}.bto.bar/healthz`;
+
+  // Wait for deployment to be live
+  const deployResult: WaitForDeploymentOutput = yield ctx.callActivity(
+    waitForDeploymentActivity,
+    {
+      repoOwner,
+      repoName,
+      healthUrl,
+      timeoutMinutes: 10,
+    }
+  );
+
+  if (deployResult.timedOut) {
+    yield ctx.callActivity(notifyTimeoutActivity, {
+      issueNumber,
+      repoOwner,
+      repoName,
+      phase: "deployment",
+      ntfyTopic: "mesh-six-pm",
+    });
+  }
+
+  // Validate deployment via smoke tests
+  const validationResult: ValidateDeploymentOutput = yield ctx.callActivity(
+    validateDeploymentActivity,
+    {
+      repoOwner,
+      repoName,
+      healthUrl,
+    }
+  );
+
+  if (!validationResult.passed) {
+    // Validation failed -> move back to Planning
+    yield ctx.callActivity(addCommentActivity, {
+      issueNumber,
+      repoOwner,
+      repoName,
+      body: `**Deployment Validation Failed**\n\nFailures:\n${validationResult.failures.map((f) => `- ${f}`).join("\n")}`,
+    });
+
+    yield ctx.callActivity(recordPendingMoveActivity, {
+      projectItemId,
+      toColumn: "Planning",
+    });
+    yield ctx.callActivity(moveCardActivity, {
+      projectItemId,
+      toColumn: "Planning",
+    });
+
+    yield ctx.callActivity(moveToFailedActivity, {
+      issueNumber,
+      repoOwner,
+      repoName,
+      projectItemId,
+      workflowId,
+      reason: `Deployment validation failed: ${validationResult.failures.join("; ")}`,
+    });
+
+    return {
+      issueNumber,
+      repoOwner,
+      repoName,
+      finalPhase: "FAILED" as WorkflowPhase,
+    };
+  }
+
+  // Deployment validated -> move to Done
+  yield ctx.callActivity(recordPendingMoveActivity, {
+    projectItemId,
+    toColumn: "Done",
+  });
+  yield ctx.callActivity(moveCardActivity, {
+    projectItemId,
+    toColumn: "Done",
+  });
+
+  console.log(`[Workflow] Issue #${issueNumber} moved to Done`);
+
+  // =====================================================================
+  // ACCEPTED — terminal success
+  // =====================================================================
+
+  yield ctx.callActivity(reportSuccessActivity, {
+    issueNumber,
+    repoOwner,
+    repoName,
+    projectItemId,
+    workflowId,
+  });
+
+  console.log(
+    `[Workflow] Issue #${issueNumber} completed successfully`
+  );
 
   return {
-    projectId: project.id,
-    finalState: currentState,
-    project: currentProject,
-  };
+    issueNumber,
+    repoOwner,
+    repoName,
+    finalPhase: "ACCEPTED" as WorkflowPhase,
+    prNumber: implResult.prNumber ?? undefined,
+  } satisfies ProjectWorkflowResult;
 };
 
-// --- Activity Placeholder Functions ---
-// These will be replaced with actual implementations at runtime
+// ---------------------------------------------------------------------------
+// WorkflowActivityImplementations interface
+// ---------------------------------------------------------------------------
 
-export let createProjectActivity: ActivityFunction<
-  z.infer<typeof CreateProjectActivityInput>,
-  Project
-> = async (ctx, input) => {
-  throw new Error("createProject activity not initialized");
-};
-
-export let evaluateGateActivity: ActivityFunction<
-  z.infer<typeof EvaluateGateActivityInput>,
-  ReviewResult
-> = async (ctx, input) => {
-  throw new Error("evaluateGate activity not initialized");
-};
-
-export let transitionStateActivity: ActivityFunction<
-  z.infer<typeof TransitionStateActivityInput>,
-  Project
-> = async (ctx, input) => {
-  throw new Error("transitionState activity not initialized");
-};
-
-export let addCommentActivity: ActivityFunction<
-  z.infer<typeof AddCommentActivityInput>,
-  boolean
-> = async (ctx, input) => {
-  throw new Error("addComment activity not initialized");
-};
-
-export let consultArchitectActivity: ActivityFunction<
-  z.infer<typeof ConsultArchitectActivityInput>,
-  unknown
-> = async (ctx, input) => {
-  throw new Error("consultArchitect activity not initialized");
-};
-
-export let requestResearchActivity: ActivityFunction<
-  z.infer<typeof RequestResearchActivityInput>,
-  unknown
-> = async (ctx, input) => {
-  throw new Error("requestResearch activity not initialized");
-};
-
-// --- Workflow Runtime Builder ---
 export interface WorkflowActivityImplementations {
-  createProject: typeof createProjectActivity;
-  evaluateGate: typeof evaluateGateActivity;
-  transitionState: typeof transitionStateActivity;
-  addComment: typeof addCommentActivity;
   consultArchitect: typeof consultArchitectActivity;
-  requestResearch: typeof requestResearchActivity;
+  enrichIssue: typeof enrichIssueActivity;
+  recordPendingMove: typeof recordPendingMoveActivity;
+  moveCard: typeof moveCardActivity;
+  recordWorkflowMapping: typeof recordWorkflowMappingActivity;
+  pollForPlan: typeof pollForPlanActivity;
+  reviewPlan: typeof reviewPlanActivity;
+  addComment: typeof addCommentActivity;
+  pollForImplementation: typeof pollForImplementationActivity;
+  pollForTestResults: typeof pollForTestResultsActivity;
+  evaluateTestResults: typeof evaluateTestResultsActivity;
+  waitForDeployment: typeof waitForDeploymentActivity;
+  validateDeployment: typeof validateDeploymentActivity;
+  createBugIssue: typeof createBugIssueActivity;
+  notifyBlocked: typeof notifyBlockedActivity;
+  notifyTimeout: typeof notifyTimeoutActivity;
+  reportSuccess: typeof reportSuccessActivity;
+  moveToFailed: typeof moveToFailedActivity;
 }
+
+// ---------------------------------------------------------------------------
+// Runtime builder
+// ---------------------------------------------------------------------------
 
 export function createWorkflowRuntime(
   activityImpls: WorkflowActivityImplementations
 ): WorkflowRuntime {
-  // Assign implementations to module-level variables
-  createProjectActivity = activityImpls.createProject;
-  evaluateGateActivity = activityImpls.evaluateGate;
-  transitionStateActivity = activityImpls.transitionState;
-  addCommentActivity = activityImpls.addComment;
+  // Wire implementations to module-level stubs
   consultArchitectActivity = activityImpls.consultArchitect;
-  requestResearchActivity = activityImpls.requestResearch;
+  enrichIssueActivity = activityImpls.enrichIssue;
+  recordPendingMoveActivity = activityImpls.recordPendingMove;
+  moveCardActivity = activityImpls.moveCard;
+  recordWorkflowMappingActivity = activityImpls.recordWorkflowMapping;
+  pollForPlanActivity = activityImpls.pollForPlan;
+  reviewPlanActivity = activityImpls.reviewPlan;
+  addCommentActivity = activityImpls.addComment;
+  pollForImplementationActivity = activityImpls.pollForImplementation;
+  pollForTestResultsActivity = activityImpls.pollForTestResults;
+  evaluateTestResultsActivity = activityImpls.evaluateTestResults;
+  waitForDeploymentActivity = activityImpls.waitForDeployment;
+  validateDeploymentActivity = activityImpls.validateDeployment;
+  createBugIssueActivity = activityImpls.createBugIssue;
+  notifyBlockedActivity = activityImpls.notifyBlocked;
+  notifyTimeoutActivity = activityImpls.notifyTimeout;
+  reportSuccessActivity = activityImpls.reportSuccess;
+  moveToFailedActivity = activityImpls.moveToFailed;
 
   const runtime = new WorkflowRuntime({
     daprHost: DAPR_HOST,
     daprPort: DAPR_HTTP_PORT,
   });
 
-  // Register workflow
+  // Register the workflow
   runtime.registerWorkflow(projectWorkflow);
 
-  // Register activities with their implementations
-  runtime.registerActivity(createProjectActivity);
-  runtime.registerActivity(evaluateGateActivity);
-  runtime.registerActivity(transitionStateActivity);
-  runtime.registerActivity(addCommentActivity);
+  // Register all activities
   runtime.registerActivity(consultArchitectActivity);
-  runtime.registerActivity(requestResearchActivity);
+  runtime.registerActivity(enrichIssueActivity);
+  runtime.registerActivity(recordPendingMoveActivity);
+  runtime.registerActivity(moveCardActivity);
+  runtime.registerActivity(recordWorkflowMappingActivity);
+  runtime.registerActivity(pollForPlanActivity);
+  runtime.registerActivity(reviewPlanActivity);
+  runtime.registerActivity(addCommentActivity);
+  runtime.registerActivity(pollForImplementationActivity);
+  runtime.registerActivity(pollForTestResultsActivity);
+  runtime.registerActivity(evaluateTestResultsActivity);
+  runtime.registerActivity(waitForDeploymentActivity);
+  runtime.registerActivity(validateDeploymentActivity);
+  runtime.registerActivity(createBugIssueActivity);
+  runtime.registerActivity(notifyBlockedActivity);
+  runtime.registerActivity(notifyTimeoutActivity);
+  runtime.registerActivity(reportSuccessActivity);
+  runtime.registerActivity(moveToFailedActivity);
 
   return runtime;
 }
 
-// --- Workflow Client Helper ---
+// ---------------------------------------------------------------------------
+// Workflow client helpers
+// ---------------------------------------------------------------------------
+
 export function createWorkflowClient(): DaprWorkflowClient {
   return new DaprWorkflowClient({
     daprHost: DAPR_HOST,
@@ -342,73 +899,66 @@ export function createWorkflowClient(): DaprWorkflowClient {
   });
 }
 
-// --- Helper Functions ---
-
 /**
- * Start a new project workflow instance
+ * Start a new project workflow instance.
  */
 export async function startProjectWorkflow(
   client: DaprWorkflowClient,
-  input: WorkflowInput,
+  input: ProjectWorkflowInput,
   instanceId?: string
 ): Promise<string> {
   const workflowInstanceId = instanceId || crypto.randomUUID();
-
   await client.scheduleNewWorkflow(projectWorkflow, input, workflowInstanceId);
-
-  console.log(`[Workflow Client] Started workflow instance: ${workflowInstanceId}`);
+  console.log(
+    `[Workflow Client] Started workflow instance: ${workflowInstanceId} for issue #${input.issueNumber}`
+  );
   return workflowInstanceId;
 }
 
 /**
- * Advance a project to the next state
- */
-export async function advanceProject(
-  client: DaprWorkflowClient,
-  instanceId: string,
-  targetState: ProjectState,
-  context?: Record<string, unknown>,
-  reason?: string
-): Promise<void> {
-  await client.raiseEvent(instanceId, ADVANCE_EVENT, {
-    targetState,
-    context,
-    reason,
-  });
-
-  console.log(`[Workflow Client] Raised advance event for ${instanceId}: → ${targetState}`);
-}
-
-/**
- * Get workflow status
- * @param client Workflow client
- * @param instanceId Workflow instance ID
- * @param includeInputsOutputs Whether to include inputs and outputs
+ * Get workflow status.
  */
 export async function getProjectWorkflowStatus(
   client: DaprWorkflowClient,
   instanceId: string,
   includeInputsOutputs = false
 ): Promise<unknown> {
-  const status = await client.getWorkflowState(instanceId, includeInputsOutputs);
-  return status;
+  return client.getWorkflowState(instanceId, includeInputsOutputs);
 }
 
 /**
- * Terminate a workflow (for cleanup/cancellation)
+ * Raise an external event on a running workflow.
+ */
+export async function raiseWorkflowEvent(
+  client: DaprWorkflowClient,
+  instanceId: string,
+  eventName: string,
+  eventData?: unknown
+): Promise<void> {
+  await client.raiseEvent(instanceId, eventName, eventData ?? {});
+  console.log(
+    `[Workflow Client] Raised event "${eventName}" on instance ${instanceId}`
+  );
+}
+
+/**
+ * Terminate a workflow.
  */
 export async function terminateProjectWorkflow(
   client: DaprWorkflowClient,
   instanceId: string,
   reason?: string
 ): Promise<void> {
-  // terminateWorkflow requires (instanceId, output) - output is the termination reason/data
-  await client.terminateWorkflow(instanceId, { reason: reason || "Terminated by user" });
-  console.log(`[Workflow Client] Terminated workflow ${instanceId}: ${reason || "No reason provided"}`);
+  await client.terminateWorkflow(instanceId, {
+    reason: reason || "Terminated by user",
+  });
+  console.log(
+    `[Workflow Client] Terminated workflow ${instanceId}: ${reason || "No reason provided"}`
+  );
 }
 
 /**
- * Purge a completed workflow from state store
+ * Purge a completed workflow from state store.
  */
 export async function purgeProjectWorkflow(
   client: DaprWorkflowClient,
@@ -417,4 +967,45 @@ export async function purgeProjectWorkflow(
   const result = await client.purgeWorkflow(instanceId);
   console.log(`[Workflow Client] Purged workflow ${instanceId}`);
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Polling helper (used by activity implementations)
+// ---------------------------------------------------------------------------
+
+/**
+ * Generic polling loop with deadline-based timeout and Blocked column detection.
+ *
+ * @param pollFn Function that performs one poll. Returns the result or null to keep polling.
+ * @param checkBlocked Function that checks if the card has moved to Blocked column.
+ * @param timeoutMinutes Total time budget for polling.
+ * @param intervalMs Polling interval in milliseconds (default: 15000).
+ * @returns The poll result, or { timedOut: true } / { blocked: true }.
+ */
+export async function pollGithubForCompletion<T>(
+  pollFn: () => Promise<T | null>,
+  checkBlocked: () => Promise<boolean>,
+  timeoutMinutes: number,
+  intervalMs = 15_000
+): Promise<{ result: T | null; timedOut: boolean; blocked: boolean }> {
+  const deadline = Date.now() + timeoutMinutes * 60 * 1000;
+
+  while (Date.now() < deadline) {
+    // Check if card has been moved to Blocked
+    const isBlocked = await checkBlocked();
+    if (isBlocked) {
+      return { result: null, timedOut: false, blocked: true };
+    }
+
+    // Attempt the poll
+    const result = await pollFn();
+    if (result !== null) {
+      return { result, timedOut: false, blocked: false };
+    }
+
+    // Wait before next poll
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  return { result: null, timedOut: true, blocked: false };
 }
