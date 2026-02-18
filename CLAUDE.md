@@ -83,7 +83,8 @@ Uses `pg` package (not `postgres`/porsager) for PgBouncer compatibility with Clo
 
 ### Dapr Components
 
-Defined in `dapr/components/`:
+Defined in `k8s/base/dapr-components/` (authoritative, managed by ArgoCD).
+Copies also exist in `dapr/components/` for local `dapr run` usage — keep in sync manually.
 - `agent-statestore` (Redis) — agent registry state
 - `agent-pubsub` (RabbitMQ) — task dispatch and results
 - `agent-statestore-outbox` (PostgreSQL) — atomic state + publish via outbox pattern

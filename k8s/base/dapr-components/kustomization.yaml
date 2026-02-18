@@ -1,3 +1,12 @@
+# Dapr component manifests for the mesh-six namespace.
+#
+# These files are the AUTHORITATIVE source deployed by ArgoCD.
+# They were copied from dapr/components/ because Kustomize's load restrictor
+# prevents referencing paths outside the kustomize root.
+#
+# If you modify a component, edit the file HERE (k8s/base/dapr-components/).
+# The copies in dapr/components/ are kept only for local `dapr run` usage
+# and must be kept in sync manually.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
