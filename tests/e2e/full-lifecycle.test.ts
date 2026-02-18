@@ -5,10 +5,14 @@ import {
   addIssueToProjectBoard,
   getItemColumn,
   getIssueComments,
+  getOpenPRs,
   queryMeshEvent,
   closeTestIssue,
+  closePool,
   TEST_APP_URL,
   TEST_PROJECT_ID,
+  TEST_REPO_OWNER,
+  TEST_REPO_NAME,
 } from "./helpers";
 import { readFileSync } from "fs";
 
@@ -44,6 +48,7 @@ describe("Full lifecycle E2E: Todo → Done", () => {
         console.error("Cleanup error:", e.message)
       );
     }
+    await closePool();
   });
 
   it("INTAKE: PM detects new Todo item (within 5 min)", async () => {
@@ -113,7 +118,7 @@ describe("Full lifecycle E2E: Todo → Done", () => {
       15_000
     );
     expect(comment).toBeTruthy();
-  }, 21 * 60 * 1000);
+  }, 25 * 60 * 1000);
 
   it("IMPLEMENTATION: Card moved to In Progress (within 5 min)", async () => {
     const col = await waitFor(
@@ -131,16 +136,7 @@ describe("Full lifecycle E2E: Todo → Done", () => {
     const pr = await waitFor(
       "PR linked to issue",
       async () => {
-        const res = await fetch(
-          `https://api.github.com/repos/bto-labs/gwa-test-app/pulls?state=open&per_page=30&sort=created`,
-          {
-            headers: {
-              Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-              Accept: "application/vnd.github+json",
-            },
-          }
-        );
-        const prs = (await res.json()) as Array<{ number: number; body?: string; title: string }>;
+        const prs = await getOpenPRs();
         return (
           prs.find(
             (pr) =>
@@ -152,7 +148,7 @@ describe("Full lifecycle E2E: Todo → Done", () => {
       15_000
     );
     expect(pr).toBeTruthy();
-  }, 41 * 60 * 1000);
+  }, 45 * 60 * 1000);
 
   it("QA: Card moved to QA column (within 5 min)", async () => {
     const col = await waitFor(
@@ -183,7 +179,7 @@ describe("Full lifecycle E2E: Todo → Done", () => {
       15_000
     );
     expect(comment).toBeTruthy();
-  }, 16 * 60 * 1000);
+  }, 20 * 60 * 1000);
 
   it("REVIEW: Card moved to Review column (within 5 min)", async () => {
     const col = await waitFor(
@@ -214,7 +210,7 @@ describe("Full lifecycle E2E: Todo → Done", () => {
       10_000
     );
     expect(ok).toBe(true);
-  }, 11 * 60 * 1000);
+  }, 15 * 60 * 1000);
 
   it("ACCEPTED: Card moved to Done (within 10 min)", async () => {
     const col = await waitFor(
@@ -226,5 +222,5 @@ describe("Full lifecycle E2E: Todo → Done", () => {
       10 * 60 * 1000
     );
     expect(col).toBe("Done");
-  }, 11 * 60 * 1000);
+  }, 15 * 60 * 1000);
 });

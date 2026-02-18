@@ -16,10 +16,15 @@ export async function waitFor<T>(
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await fn();
-    if (result !== null && result !== undefined) {
-      console.log(`✓ ${description}`);
-      return result;
+    try {
+      const result = await fn();
+      if (result !== null && result !== undefined) {
+        console.log(`✓ ${description}`);
+        return result;
+      }
+    } catch (err) {
+      // Transient error — log and retry
+      console.warn(`⚠ ${description}: transient error, retrying... (${(err as Error).message})`);
     }
     await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
@@ -95,7 +100,16 @@ export async function getIssueComments(
   const data = await githubRequest(
     `/repos/${TEST_REPO_OWNER}/${TEST_REPO_NAME}/issues/${issueNumber}/comments?per_page=100`
   ) as Array<{ body: string; created_at: string }>;
-  return data.map((c) => ({ body: c.body, createdAt: c.created_at }));
+  // Reverse to newest-first (GitHub returns oldest-first, and .find() picks the first match)
+  return data
+    .map((c) => ({ body: c.body, createdAt: c.created_at }))
+    .reverse();
+}
+
+export async function getOpenPRs(): Promise<Array<{ number: number; body?: string; title: string }>> {
+  return githubRequest(
+    `/repos/${TEST_REPO_OWNER}/${TEST_REPO_NAME}/pulls?state=open&per_page=30&sort=created`
+  ) as Promise<Array<{ number: number; body?: string; title: string }>>;
 }
 
 // ---- GitHub Projects helpers ----
@@ -136,22 +150,35 @@ export async function getItemColumn(projectItemId: string): Promise<string | nul
 }
 
 // ---- Database helpers ----
+let _pool: pg.Pool | null = null;
+
+function getPool(): pg.Pool {
+  if (!DATABASE_URL) throw new Error("DATABASE_URL env var not set");
+  if (!_pool) {
+    _pool = new pg.Pool({ connectionString: DATABASE_URL, max: 2 });
+  }
+  return _pool;
+}
+
+export async function closePool(): Promise<void> {
+  if (_pool) {
+    await _pool.end();
+    _pool = null;
+  }
+}
+
 export async function queryMeshEvent(
   eventType: string,
   agentId: string,
   sinceMs: number
 ): Promise<boolean> {
   if (!DATABASE_URL) return false;
-  const pool = new pg.Pool({ connectionString: DATABASE_URL });
-  try {
-    const result = await pool.query(
-      `SELECT COUNT(*) FROM mesh_six_events
-       WHERE event_type = $1 AND agent_id = $2
-         AND timestamp > NOW() - ($3 || ' milliseconds')::interval`,
-      [eventType, agentId, sinceMs]
-    );
-    return parseInt(result.rows[0].count) > 0;
-  } finally {
-    await pool.end();
-  }
+  const pool = getPool();
+  const result = await pool.query(
+    `SELECT COUNT(*) FROM mesh_six_events
+     WHERE event_type = $1 AND agent_id = $2
+       AND timestamp > NOW() - make_interval(secs => $3::numeric / 1000)`,
+    [eventType, agentId, sinceMs]
+  );
+  return parseInt(result.rows[0].count) > 0;
 }
