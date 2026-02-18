@@ -1,0 +1,19 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: agent-outbox
+  namespace: mesh-six
+spec:
+  type: state.postgresql
+  version: v1
+  metadata:
+    - name: connectionString
+      secretKeyRef:
+        name: postgres-secret
+        key: url
+    - name: outboxPublishPubsub
+      value: "agent-pubsub"
+    - name: outboxPublishTopic
+      value: "task-results"
+    - name: actorStateStore
+      value: "false"
