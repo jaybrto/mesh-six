@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   core-tests:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +28,7 @@ jobs:
         run: cd packages/core && bun test
 
   detect-changed-apps:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       apps: ${{ steps.filter.outputs.apps }}
     steps:
@@ -46,7 +46,11 @@ jobs:
             architect-agent
             argocd-deployer
             claude-mqtt-bridge
+            cost-tracker
             dashboard
+            event-logger
+            homelab-monitor
+            infra-manager
             kubectl-deployer
             orchestrator
             project-manager
@@ -54,6 +58,7 @@ jobs:
             researcher-agent
             simple-agent
             ui-agent
+            webhook-receiver
           )
 
           APPS=()
@@ -80,7 +85,7 @@ jobs:
   typecheck-apps:
     needs: detect-changed-apps
     if: ${{ needs.detect-changed-apps.outputs.apps != '[]' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:
