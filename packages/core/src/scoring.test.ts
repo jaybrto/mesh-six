@@ -222,7 +222,7 @@ describe("AgentScorer", () => {
 
   describe("recordTaskResult", () => {
     it("inserts task result with correct parameters", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const scorer = new AgentScorer(pool);
 
@@ -237,7 +237,7 @@ describe("AgentScorer", () => {
       await scorer.recordTaskResult(result, "code-review");
 
       expect(queryMock).toHaveBeenCalledTimes(1);
-      const [sql, params] = queryMock.mock.calls[0];
+      const [sql, params] = queryMock.mock.calls[0]!;
       expect(sql).toContain("INSERT INTO agent_task_history");
       expect(params).toEqual([
         result.taskId,
@@ -251,7 +251,7 @@ describe("AgentScorer", () => {
     });
 
     it("passes error type when present", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const scorer = new AgentScorer(pool);
 
@@ -266,7 +266,7 @@ describe("AgentScorer", () => {
 
       await scorer.recordTaskResult(result, "code-review");
 
-      const [, params] = queryMock.mock.calls[0];
+      const [, params] = queryMock.mock.calls[0]!;
       expect(params[5]).toBe("TIMEOUT");
     });
   });
@@ -309,24 +309,24 @@ describe("AgentScorer", () => {
     });
 
     it("passes limit to query", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const scorer = new AgentScorer(pool);
 
       await scorer.getAgentHistory("agent-1", 10);
 
-      const [, params] = queryMock.mock.calls[0];
+      const [, params] = queryMock.mock.calls[0]!;
       expect(params[1]).toBe(10);
     });
 
     it("defaults limit to 20", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const scorer = new AgentScorer(pool);
 
       await scorer.getAgentHistory("agent-1");
 
-      const [, params] = queryMock.mock.calls[0];
+      const [, params] = queryMock.mock.calls[0]!;
       expect(params[1]).toBe(20);
     });
   });

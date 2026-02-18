@@ -90,7 +90,7 @@ describe("AgentRegistrationSchema", () => {
   });
 
   it("accepts all valid status values", () => {
-    for (const status of ["online", "degraded", "offline"]) {
+    for (const status of ["online", "degraded", "offline"] as const) {
       const result = AgentRegistrationSchema.parse({
         ...validRegistration,
         status,
@@ -263,7 +263,7 @@ describe("TaskStatusSchema", () => {
   });
 
   it("validates status enum values", () => {
-    for (const status of ["pending", "dispatched", "completed", "failed", "timeout"]) {
+    for (const status of ["pending", "dispatched", "completed", "failed", "timeout"] as const) {
       const result = TaskStatusSchema.parse({
         taskId: validUuid,
         capability: "test",
