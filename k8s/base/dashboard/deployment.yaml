@@ -26,7 +26,7 @@ spec:
               name: http
           env:
             - name: VITE_MQTT_URL
-              value: "ws://rabbitmq.rabbitmq:15675/ws"
+              value: "wss://rabbitmq-ws.bto.bar/ws"
           readinessProbe:
             httpGet:
               path: /
