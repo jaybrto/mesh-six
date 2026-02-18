@@ -29,13 +29,13 @@ spec:
               value: "wss://rabbitmq-ws.bto.bar/ws"
           readinessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: 80
             initialDelaySeconds: 3
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: 80
             initialDelaySeconds: 5
             periodSeconds: 20

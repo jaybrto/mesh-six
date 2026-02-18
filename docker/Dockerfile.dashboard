@@ -1,16 +1,20 @@
-FROM oven/bun:latest AS builder
+FROM oven/bun:1.2 AS builder
 WORKDIR /app
 
-# Copy workspace files for monorepo dependency resolution
+# Copy workspace manifests first (cached if only source changes, not deps)
 COPY package.json bunfig.toml bun.lock* ./
-COPY packages/ packages/
+COPY packages/core/package.json packages/core/
+COPY apps/dashboard/package.json apps/dashboard/
+
+RUN bun install --frozen-lockfile
+
+# Now copy source (cache miss only when source changes)
+COPY packages/core/ packages/core/
 COPY apps/dashboard/ apps/dashboard/
 
-# Inject placeholder that will be replaced at container startup by envsubst
 ARG VITE_MQTT_URL=__MQTT_URL_PLACEHOLDER__
 ENV VITE_MQTT_URL=${VITE_MQTT_URL}
 
-RUN bun install --frozen-lockfile
 RUN cd apps/dashboard && bun run build
 
 FROM nginx:alpine
