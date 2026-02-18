@@ -11,8 +11,6 @@ import {
   closePool,
   TEST_APP_URL,
   TEST_PROJECT_ID,
-  TEST_REPO_OWNER,
-  TEST_REPO_NAME,
 } from "./helpers";
 import { readFileSync } from "fs";
 
