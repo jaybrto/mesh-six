@@ -178,7 +178,7 @@ describe("transitionClose", () => {
   });
 
   it("generates reflection via LLM and stores memories with correct scope", async () => {
-    const storeMock = mock(() => Promise.resolve());
+    const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
     generateTextImpl = mock(() =>
@@ -213,12 +213,12 @@ describe("transitionClose", () => {
     expect(storeMock).toHaveBeenCalledTimes(2);
 
     // First memory: scope "agent" -> userId = "agent-1"
-    const firstCall = storeMock.mock.calls[0];
+    const firstCall = storeMock.mock.calls[0]!;
     expect(firstCall[0][0].content).toContain("Agent handled edge case well");
     expect(firstCall[1]).toBe("agent-1");
 
     // Second memory: scope "task" -> userId = "task-task-123"
-    const secondCall = storeMock.mock.calls[1];
+    const secondCall = storeMock.mock.calls[1]!;
     expect(secondCall[0][0].content).toContain(
       "Task required special permissions"
     );
@@ -226,7 +226,7 @@ describe("transitionClose", () => {
   });
 
   it("stores nothing when output has empty memories array", async () => {
-    const storeMock = mock(() => Promise.resolve());
+    const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
     generateTextImpl = () =>
@@ -246,7 +246,7 @@ describe("transitionClose", () => {
   });
 
   it("stores nothing when output is null/undefined", async () => {
-    const storeMock = mock(() => Promise.resolve());
+    const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
     generateTextImpl = () => Promise.resolve({ output: null });
@@ -265,7 +265,7 @@ describe("transitionClose", () => {
   });
 
   it("only passes last 6 conversation history messages to LLM", async () => {
-    const storeMock = mock(() => Promise.resolve());
+    const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
     let capturedMessages: any[] = [];
@@ -299,7 +299,7 @@ describe("transitionClose", () => {
   });
 
   it("resolveMemoryUserId: project scope uses project-{id}", async () => {
-    const storeMock = mock(() => Promise.resolve());
+    const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
     generateTextImpl = () =>
@@ -322,11 +322,11 @@ describe("transitionClose", () => {
     await transitionClose(config, mem, {} as any);
 
     expect(storeMock).toHaveBeenCalledTimes(1);
-    expect(storeMock.mock.calls[0][1]).toBe("project-proj-42");
+    expect(storeMock.mock.calls[0]![1]).toBe("project-proj-42");
   });
 
   it("resolveMemoryUserId: project scope falls back to agentId when no projectId", async () => {
-    const storeMock = mock(() => Promise.resolve());
+    const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
     generateTextImpl = () =>
@@ -348,11 +348,11 @@ describe("transitionClose", () => {
     await transitionClose(config, mem, {} as any);
 
     expect(storeMock).toHaveBeenCalledTimes(1);
-    expect(storeMock.mock.calls[0][1]).toBe("agent-1");
+    expect(storeMock.mock.calls[0]![1]).toBe("agent-1");
   });
 
   it("resolveMemoryUserId: global scope uses mesh-six-learning", async () => {
-    const storeMock = mock(() => Promise.resolve());
+    const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
     generateTextImpl = () =>
@@ -373,11 +373,11 @@ describe("transitionClose", () => {
 
     await transitionClose(config, mem, {} as any);
 
-    expect(storeMock.mock.calls[0][1]).toBe("mesh-six-learning");
+    expect(storeMock.mock.calls[0]![1]).toBe("mesh-six-learning");
   });
 
   it("formats stored memory content with transition arrow prefix", async () => {
-    const storeMock = mock(() => Promise.resolve());
+    const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
     generateTextImpl = () =>
@@ -398,7 +398,7 @@ describe("transitionClose", () => {
 
     await transitionClose(config, mem, {} as any);
 
-    const storedMessages = storeMock.mock.calls[0][0];
+    const storedMessages = storeMock.mock.calls[0]![0];
     expect(storedMessages[0].role).toBe("system");
     expect(storedMessages[0].content).toContain("[reviewing\u2192completed]");
     expect(storedMessages[0].content).toContain("some insight");

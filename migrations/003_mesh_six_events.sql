@@ -38,5 +38,5 @@ CREATE INDEX idx_events_task ON mesh_six_events (task_id) WHERE task_id IS NOT N
 CREATE INDEX idx_events_agent_type ON mesh_six_events (agent_id, event_type, timestamp DESC);
 CREATE INDEX idx_events_aggregate ON mesh_six_events (aggregate_id, seq ASC)
   WHERE aggregate_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_events_idempotency ON mesh_six_events (idempotency_key)
+CREATE UNIQUE INDEX idx_events_idempotency ON mesh_six_events (idempotency_key, timestamp)
   WHERE idempotency_key IS NOT NULL;

@@ -22,6 +22,7 @@ resources:
   - cost-tracker/
   - dashboard/
   - event-logger/
+  - webhook-receiver/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

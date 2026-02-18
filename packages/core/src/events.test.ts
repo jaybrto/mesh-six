@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach } from "bun:test";
+import { describe, it, expect, mock } from "bun:test";
 import { EventLog, type MeshEvent } from "./events.js";
 
 function createMockPool(queryFn?: (...args: any[]) => any) {
@@ -20,14 +20,14 @@ function makeEvent(overrides: Partial<MeshEvent> = {}): MeshEvent {
 describe("EventLog", () => {
   describe("emit", () => {
     it("inserts a single event with correct parameters", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const log = new EventLog(pool);
 
       await log.emit(makeEvent({ taskId: "task-1", aggregateId: "agg-1" }));
 
       expect(queryMock).toHaveBeenCalledTimes(1);
-      const [sql, params] = queryMock.mock.calls[0];
+      const [sql, params] = queryMock.mock.calls[0]!;
       expect(sql).toContain("INSERT INTO mesh_six_events");
       expect(params[0]).toBe("trace-1");
       expect(params[1]).toBe("task-1");
@@ -40,13 +40,13 @@ describe("EventLog", () => {
     });
 
     it("sets optional fields to null when not provided", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const log = new EventLog(pool);
 
       await log.emit(makeEvent());
 
-      const [, params] = queryMock.mock.calls[0];
+      const [, params] = queryMock.mock.calls[0]!;
       expect(params[1]).toBeNull(); // taskId
       expect(params[6]).toBeNull(); // aggregateId
       expect(params[7]).toBeNull(); // idempotencyKey
@@ -65,7 +65,7 @@ describe("EventLog", () => {
     });
 
     it("inserts multiple events in one query", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const log = new EventLog(pool);
 
@@ -75,7 +75,7 @@ describe("EventLog", () => {
       ]);
 
       expect(queryMock).toHaveBeenCalledTimes(1);
-      const [sql, params] = queryMock.mock.calls[0];
+      const [sql, params] = queryMock.mock.calls[0]!;
       expect(sql).toContain("VALUES");
       expect(params).toHaveLength(16); // 2 events x 8 fields
       expect(params[0]).toBe("t1");
@@ -85,7 +85,7 @@ describe("EventLog", () => {
 
   describe("query", () => {
     it("returns mapped events with snake_case to camelCase", async () => {
-      const queryMock = mock(() =>
+      const queryMock = mock((_sql: string, _params: any[]) =>
         Promise.resolve({
           rows: [
             {
@@ -115,13 +115,13 @@ describe("EventLog", () => {
     });
 
     it("builds WHERE clause from provided options", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const log = new EventLog(pool);
 
       await log.query({ traceId: "t1", agentId: "a1", eventType: "llm.call" });
 
-      const [sql, params] = queryMock.mock.calls[0];
+      const [sql, params] = queryMock.mock.calls[0]!;
       expect(sql).toContain("trace_id = $1");
       expect(sql).toContain("agent_id = $2");
       expect(sql).toContain("event_type = $3");
@@ -131,13 +131,13 @@ describe("EventLog", () => {
     });
 
     it("uses default limit of 100", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const log = new EventLog(pool);
 
       await log.query({});
 
-      const [sql, params] = queryMock.mock.calls[0];
+      const [sql, params] = queryMock.mock.calls[0]!;
       expect(sql).toContain("LIMIT $1");
       expect(params[0]).toBe(100);
     });
@@ -145,26 +145,26 @@ describe("EventLog", () => {
 
   describe("replay", () => {
     it("queries by aggregate_id ordered by seq", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const log = new EventLog(pool);
 
       await log.replay("task:abc");
 
-      const [sql, params] = queryMock.mock.calls[0];
+      const [sql, params] = queryMock.mock.calls[0]!;
       expect(sql).toContain("aggregate_id = $1");
       expect(sql).toContain("ORDER BY seq ASC");
       expect(params[0]).toBe("task:abc");
     });
 
     it("filters by afterSeq when provided", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const log = new EventLog(pool);
 
       await log.replay("task:abc", 42);
 
-      const [sql, params] = queryMock.mock.calls[0];
+      const [sql, params] = queryMock.mock.calls[0]!;
       expect(sql).toContain("seq > $2");
       expect(params[1]).toBe(42);
     });
@@ -172,13 +172,13 @@ describe("EventLog", () => {
 
   describe("idempotency", () => {
     it("passes idempotency_key through emit", async () => {
-      const queryMock = mock(() => Promise.resolve({ rows: [] }));
+      const queryMock = mock((_sql: string, _params: any[]) => Promise.resolve({ rows: [] }));
       const pool = createMockPool(queryMock);
       const log = new EventLog(pool);
 
       await log.emit(makeEvent({ idempotencyKey: "dedup-key-1" }));
 
-      const [, params] = queryMock.mock.calls[0];
+      const [, params] = queryMock.mock.calls[0]!;
       expect(params[7]).toBe("dedup-key-1");
     });
   });

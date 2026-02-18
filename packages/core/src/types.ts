@@ -106,3 +106,44 @@ export interface DaprSubscription {
   route: string;
   metadata?: Record<string, string>;
 }
+
+// --- Board Events (M4.5: GitHub Projects webhook events) ---
+export const BoardEventBase = z.object({
+  issueNumber: z.number(),
+  repoOwner: z.string(),
+  repoName: z.string(),
+  projectItemId: z.string(),
+  timestamp: z.string(),
+});
+
+export const NewTodoEvent = BoardEventBase.extend({
+  type: z.literal("new-todo"),
+  issueTitle: z.string(),
+  contentNodeId: z.string(),
+  detectedVia: z.enum(["webhook", "poll"]),
+});
+
+export const CardBlockedEvent = BoardEventBase.extend({
+  type: z.literal("card-blocked"),
+  fromColumn: z.string(),
+});
+
+export const CardUnblockedEvent = BoardEventBase.extend({
+  type: z.literal("card-unblocked"),
+  toColumn: z.string(),
+});
+
+export const CardMovedEvent = BoardEventBase.extend({
+  type: z.literal("card-moved"),
+  fromColumn: z.string(),
+  toColumn: z.string(),
+});
+
+export const BoardEvent = z.discriminatedUnion("type", [
+  NewTodoEvent,
+  CardBlockedEvent,
+  CardUnblockedEvent,
+  CardMovedEvent,
+]);
+
+export type BoardEventType = z.infer<typeof BoardEvent>;

@@ -14,8 +14,12 @@ import {
   buildAgentContext,
   transitionClose,
   EventLog,
+  GitHubProjectClient,
+  BoardEvent,
   DAPR_PUBSUB_NAME,
+  DAPR_STATE_STORE,
   TASK_RESULTS_TOPIC,
+  tracedGenerateText,
   type AgentRegistration,
   type TaskRequest,
   type TaskResult,
@@ -23,21 +27,22 @@ import {
   type DaprSubscription,
   type ContextConfig,
   type TransitionCloseConfig,
+  type BoardEventType,
 } from "@mesh-six/core";
 import {
   createWorkflowRuntime,
   createWorkflowClient,
   startProjectWorkflow,
-  advanceProject,
   getProjectWorkflowStatus,
-  createProjectActivity,
-  evaluateGateActivity,
-  transitionStateActivity,
-  addCommentActivity,
-  consultArchitectActivity,
-  requestResearchActivity,
-  type WorkflowInput,
+  raiseWorkflowEvent,
+  pollGithubForCompletion,
+  type ProjectWorkflowInput,
   type WorkflowActivityImplementations,
+  type ConsultArchitectOutput,
+  type ReviewPlanOutput,
+  type EvaluateTestResultsOutput,
+  type ValidateDeploymentOutput,
+  type WaitForDeploymentOutput,
 } from "./workflow.js";
 
 // --- Configuration ---
@@ -58,6 +63,13 @@ const LLM_MODEL = process.env.LLM_MODEL || "anthropic/claude-sonnet-4-20250514";
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 const GITEA_URL = process.env.GITEA_URL || "";
 const GITEA_TOKEN = process.env.GITEA_TOKEN || "";
+
+// GitHub Projects Configuration
+const GITHUB_PROJECT_ID = process.env.GITHUB_PROJECT_ID || "";
+const GITHUB_STATUS_FIELD_ID = process.env.GITHUB_STATUS_FIELD_ID || "";
+
+// Notification Configuration
+const NTFY_TOPIC = process.env.NTFY_TOPIC || "";
 
 // MQTT Configuration
 const MQTT_URL = process.env.MQTT_URL || "mqtt://rabbitmq.rabbitmq:1883";
@@ -83,10 +95,21 @@ let memory: AgentMemory | null = null;
 
 // --- Event Log ---
 let eventLog: EventLog | null = null;
-if (DATABASE_URL) {
-  const pool = new Pool({ connectionString: DATABASE_URL });
-  eventLog = new EventLog(pool);
+const pgPool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+if (pgPool) {
+  eventLog = new EventLog(pgPool);
   console.log(`[${AGENT_ID}] Event log initialized`);
+}
+
+// --- GitHub Projects Client ---
+let ghProjectClient: GitHubProjectClient | null = null;
+if (GITHUB_TOKEN && GITHUB_PROJECT_ID && GITHUB_STATUS_FIELD_ID) {
+  ghProjectClient = new GitHubProjectClient({
+    token: GITHUB_TOKEN,
+    projectId: GITHUB_PROJECT_ID,
+    statusFieldId: GITHUB_STATUS_FIELD_ID,
+  });
+  console.log(`[${AGENT_ID}] GitHub Projects client initialized`);
 }
 
 // --- MQTT Client ---
@@ -99,6 +122,49 @@ let workflowClient: DaprWorkflowClient | null = null;
 // --- Workflow Instance Tracking ---
 // Maps project UUID to workflow instance ID
 const projectWorkflowMap = new Map<string, string>();
+
+// --- pm_workflow_instances Query Helpers ---
+interface WorkflowInstanceRow {
+  id: string;
+  workflow_id: string;
+  issue_number: number;
+  repo_owner: string;
+  repo_name: string;
+  current_phase: string;
+  status: string;
+  project_item_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+async function lookupByIssue(
+  repoOwner: string,
+  repoName: string,
+  issueNumber: number
+): Promise<WorkflowInstanceRow | null> {
+  if (!pgPool) return null;
+  const { rows } = await pgPool.query<WorkflowInstanceRow>(
+    `SELECT * FROM pm_workflow_instances WHERE repo_owner = $1 AND repo_name = $2 AND issue_number = $3 LIMIT 1`,
+    [repoOwner, repoName, issueNumber]
+  );
+  return rows[0] ?? null;
+}
+
+async function updatePhase(workflowId: string, phase: string): Promise<void> {
+  if (!pgPool) return;
+  await pgPool.query(
+    `UPDATE pm_workflow_instances SET current_phase = $1, updated_at = NOW() WHERE workflow_id = $2`,
+    [phase, workflowId]
+  );
+}
+
+async function updateStatus(workflowId: string, status: string): Promise<void> {
+  if (!pgPool) return;
+  await pgPool.query(
+    `UPDATE pm_workflow_instances SET status = $1, updated_at = NOW() WHERE workflow_id = $2`,
+    [status, workflowId]
+  );
+}
 
 // --- Code Pod Progress Event Schema ---
 interface CodePodProgress {
@@ -934,6 +1000,11 @@ app.get("/dapr/subscribe", (c): Response => {
       topic: "project-events",
       route: "/project-events",
     },
+    {
+      pubsubname: DAPR_PUBSUB_NAME,
+      topic: "board-events",
+      route: "/board-events",
+    },
   ];
   return c.json(subscriptions);
 });
@@ -950,19 +1021,17 @@ app.post("/projects", async (c) => {
     const body = await c.req.json();
     const { title, description, platform, repoOwner, repoName, context } = body;
 
-    const workflowInput: WorkflowInput = {
-      title,
-      description,
-      platform: platform || "github",
-      repoOwner,
-      repoName,
-      context,
+    // Legacy project creation endpoint — now wraps the board-driven workflow
+    const workflowInput: ProjectWorkflowInput = {
+      issueNumber: body.issueNumber || 0,
+      issueTitle: title || "Untitled Project",
+      repoOwner: repoOwner || "",
+      repoName: repoName || "",
+      projectItemId: body.projectItemId || "",
+      contentNodeId: body.contentNodeId || "",
     };
 
-    // Generate a project ID that will be used as workflow instance ID
     const projectId = crypto.randomUUID();
-
-    // Start workflow instance with project ID as instance ID
     const workflowInstanceId = await startProjectWorkflow(
       workflowClient,
       workflowInput,
@@ -1062,12 +1131,11 @@ app.post("/projects/:id/advance", async (c) => {
     const { targetState, context, reason } = body;
 
     // Raise advance event to workflow
-    await advanceProject(
+    await raiseWorkflowEvent(
       workflowClient,
       workflowInstanceId,
-      targetState,
-      context || {},
-      reason
+      "advance",
+      { targetState, context: context || {}, reason }
     );
 
     console.log(`[${AGENT_ID}] Raised advance event for project ${projectId} → ${targetState}`);
@@ -1233,6 +1301,106 @@ app.post("/project-events", async (c) => {
   return c.json({ status: "SUCCESS" });
 });
 
+// --- Board Events Handler (from webhook-receiver) ---
+app.post("/board-events", async (c) => {
+  const message: DaprPubSubMessage<unknown> = await c.req.json();
+
+  let event: BoardEventType;
+  try {
+    event = BoardEvent.parse(message.data);
+  } catch (err) {
+    console.error(`[${AGENT_ID}] Invalid board event:`, err);
+    return c.json({ status: "SUCCESS" });
+  }
+
+  console.log(`[${AGENT_ID}] Board event: type=${event.type} issue=#${event.issueNumber} repo=${event.repoOwner}/${event.repoName}`);
+
+  try {
+    switch (event.type) {
+      case "new-todo": {
+        // Start a new Dapr Workflow for this issue
+        if (!workflowClient) {
+          console.warn(`[${AGENT_ID}] Workflow client not ready, cannot start workflow for issue #${event.issueNumber}`);
+          break;
+        }
+
+        const workflowInput: ProjectWorkflowInput = {
+          issueNumber: event.issueNumber,
+          issueTitle: event.issueTitle,
+          repoOwner: event.repoOwner,
+          repoName: event.repoName,
+          projectItemId: event.projectItemId,
+          contentNodeId: event.contentNodeId,
+        };
+
+        const workflowInstanceId = await startProjectWorkflow(workflowClient, workflowInput);
+
+        // Insert into pm_workflow_instances
+        if (pgPool) {
+          await pgPool.query(
+            `INSERT INTO pm_workflow_instances (workflow_id, issue_number, repo_owner, repo_name, current_phase, status, project_item_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [workflowInstanceId, event.issueNumber, event.repoOwner, event.repoName, "PLANNING", "active", event.projectItemId]
+          );
+        }
+
+        console.log(`[${AGENT_ID}] Started workflow ${workflowInstanceId} for issue #${event.issueNumber}`);
+        break;
+      }
+
+      case "card-blocked": {
+        const instance = await lookupByIssue(event.repoOwner, event.repoName, event.issueNumber);
+        if (!instance) {
+          console.warn(`[${AGENT_ID}] No workflow instance found for issue #${event.issueNumber}`);
+          break;
+        }
+        if (workflowClient) {
+          await workflowClient.raiseEvent(instance.workflow_id, "card-blocked", {
+            fromColumn: event.fromColumn,
+            timestamp: event.timestamp,
+          });
+          await updateStatus(instance.workflow_id, "blocked");
+          console.log(`[${AGENT_ID}] Raised card-blocked event on workflow ${instance.workflow_id}`);
+        }
+        break;
+      }
+
+      case "card-unblocked": {
+        const instance = await lookupByIssue(event.repoOwner, event.repoName, event.issueNumber);
+        if (!instance) {
+          console.warn(`[${AGENT_ID}] No workflow instance found for issue #${event.issueNumber}`);
+          break;
+        }
+        if (workflowClient) {
+          await workflowClient.raiseEvent(instance.workflow_id, "card-unblocked", {
+            toColumn: event.toColumn,
+            timestamp: event.timestamp,
+          });
+          await updateStatus(instance.workflow_id, "active");
+          console.log(`[${AGENT_ID}] Raised card-unblocked event on workflow ${instance.workflow_id}`);
+        }
+        break;
+      }
+
+      case "card-moved": {
+        const instance = await lookupByIssue(event.repoOwner, event.repoName, event.issueNumber);
+        if (instance) {
+          console.log(`[${AGENT_ID}] Card moved: issue #${event.issueNumber} from "${event.fromColumn}" to "${event.toColumn}" (workflow ${instance.workflow_id})`);
+          await updatePhase(instance.workflow_id, event.toColumn);
+        } else {
+          console.log(`[${AGENT_ID}] Card moved for untracked issue #${event.issueNumber}: "${event.fromColumn}" -> "${event.toColumn}"`);
+        }
+        break;
+      }
+    }
+  } catch (err) {
+    console.error(`[${AGENT_ID}] Error handling board event:`, err);
+  }
+
+  // Always ACK to Dapr
+  return c.json({ status: "SUCCESS" });
+});
+
 // --- Lifecycle ---
 let heartbeatInterval: Timer | null = null;
 
@@ -1258,92 +1426,220 @@ async function start(): Promise<void> {
     gitea: !!GITEA_URL && !!GITEA_TOKEN,
   });
 
+  // Load GitHub Projects column mapping
+  if (ghProjectClient) {
+    try {
+      const columnMap = await ghProjectClient.loadColumnMapping();
+      console.log(`[${AGENT_ID}] GitHub Projects column mapping loaded:`, Object.keys(columnMap));
+    } catch (error) {
+      console.warn(`[${AGENT_ID}] Failed to load GitHub Projects column mapping:`, error);
+    }
+  }
+
   // Initialize Workflow Runtime and Client
   try {
     console.log(`[${AGENT_ID}] Initializing Dapr Workflow runtime...`);
 
-    // Create activity implementations that wrap existing functions
+    // M4.5 activity implementations for the board-driven workflow
     const activityImplementations: WorkflowActivityImplementations = {
-      createProject: async (ctx, input) => {
-        const { title, description, platform, repoOwner, repoName, architectGuidance, context } = input;
-
-        // Create issue on platform
-        const issueBody = `## Project: ${title}
-
-${description}
-
----
-
-### Architectural Guidance
-\`\`\`json
-${JSON.stringify(architectGuidance, null, 2)}
-\`\`\`
-
----
-
-*Managed by Project Manager Agent (mesh-six)*`;
-
-        let issueResult: { issueNumber: number; url: string } | null = null;
-
-        if (platform === "github") {
-          issueResult = await createGitHubIssue(repoOwner, repoName, title, issueBody);
-        } else if (platform === "gitea") {
-          issueResult = await createGiteaIssue(repoOwner, repoName, title, issueBody);
+      consultArchitect: async (_ctx, input) => {
+        const result = await consultArchitect(input.question);
+        if (typeof result === "object" && result !== null && "error" in result) {
+          return { guidance: "Architect agent unavailable. Proceeding with best effort.", fallback: true };
         }
+        return { guidance: JSON.stringify(result), fallback: false };
+      },
 
-        // Create project record
-        const now = new Date().toISOString();
-        const project: Project = {
-          id: crypto.randomUUID(),
-          title,
-          description,
-          state: "CREATE",
-          platform,
-          repoOwner,
-          repoName,
-          issueNumber: issueResult?.issueNumber,
-          createdAt: now,
-          updatedAt: now,
-          stateHistory: [{ state: "CREATE", timestamp: now, reason: "Project created" }],
-          metadata: {
-            architectGuidance,
-            issueUrl: issueResult?.url,
-            ...context,
+      enrichIssue: async (_ctx, input) => {
+        const body = `### Architect Guidance\n\n${input.guidance}\n\n### Acceptance Criteria\n\n${input.acceptanceCriteria}\n\n---\n*Enriched by Project Manager Agent (mesh-six)*`;
+        await addGitHubComment(input.repoOwner, input.repoName, input.issueNumber, body);
+      },
+
+      recordPendingMove: async (_ctx, input) => {
+        await daprClient.state.save(DAPR_STATE_STORE, [
+          { key: `pending-moves:${input.projectItemId}`, value: input.toColumn },
+        ]);
+      },
+
+      moveCard: async (_ctx, input) => {
+        if (!ghProjectClient) throw new Error("GitHub Projects client not configured");
+        await ghProjectClient.moveCard(input.projectItemId, input.toColumn);
+        // Clear pending move after successful move
+        await daprClient.state.delete(DAPR_STATE_STORE, `pending-moves:${input.projectItemId}`);
+      },
+
+      recordWorkflowMapping: async (_ctx, input) => {
+        if (!pgPool) return;
+        await pgPool.query(
+          `INSERT INTO pm_workflow_instances (workflow_id, issue_number, repo_owner, repo_name, project_item_id, current_phase, status)
+           VALUES ($1, $2, $3, $4, $5, 'INTAKE', 'active')
+           ON CONFLICT (issue_number, repo_owner, repo_name) DO UPDATE SET workflow_id = $1, updated_at = NOW()`,
+          [input.workflowId, input.issueNumber, input.repoOwner, input.repoName, input.projectItemId]
+        );
+      },
+
+      pollForPlan: async (_ctx, input) => {
+        if (!ghProjectClient) return { planContent: "", timedOut: true, blocked: false };
+        const { result, timedOut, blocked } = await pollGithubForCompletion(
+          async () => {
+            const comments = await ghProjectClient!.getIssueComments(input.repoOwner, input.repoName, input.issueNumber);
+            // Look for a comment that looks like a plan (has headings, task lists)
+            for (const comment of comments.reverse()) {
+              if (comment.body.length > 200 && (comment.body.includes("##") || comment.body.includes("- ["))) {
+                return comment.body;
+              }
+            }
+            return null;
           },
-        };
-
-        // Store in legacy map for backwards compatibility
-        projects.set(project.id, project);
-
-        console.log(`[Activity] Created project: ${project.id}`);
-        return project;
+          async () => {
+            const col = await ghProjectClient!.getItemColumn(input.projectItemId);
+            return col === "Blocked";
+          },
+          input.timeoutMinutes
+        );
+        return { planContent: result ?? "", timedOut, blocked };
       },
 
-      evaluateGate: async (ctx, input) => {
-        return await evaluateReviewGate(input.project, input.gateType, input.context);
-      },
-
-      transitionState: async (ctx, input) => {
-        const updatedProject = await transitionState(input.project, input.newState, input.reason);
-        // Update legacy map
-        projects.set(updatedProject.id, updatedProject);
-        return updatedProject;
-      },
-
-      addComment: async (ctx, input) => {
-        if (input.platform === "github") {
-          return await addGitHubComment(input.repoOwner, input.repoName, input.issueNumber, input.body);
+      reviewPlan: async (_ctx, input) => {
+        const { text } = await tracedGenerateText({
+          agentId: AGENT_ID,
+          traceId: crypto.randomUUID(),
+          model: llm(LLM_MODEL) as any,
+          system: "You are a technical plan reviewer. Evaluate this plan for completeness, technical soundness, and scope. Respond with JSON: { approved: boolean, feedback: string, confidence: number }",
+          prompt: `Review this implementation plan for issue #${input.issueNumber} in ${input.repoOwner}/${input.repoName}:\n\n${input.planContent}`,
+          eventLog: eventLog ?? undefined,
+        });
+        try {
+          return JSON.parse(text);
+        } catch {
+          return { approved: false, feedback: "Failed to parse review output", confidence: 0 };
         }
-        // TODO: Add Gitea comment support
-        return false;
       },
 
-      consultArchitect: async (ctx, input) => {
-        return await consultArchitect(input.question);
+      addComment: async (_ctx, input) => {
+        await addGitHubComment(input.repoOwner, input.repoName, input.issueNumber, input.body);
       },
 
-      requestResearch: async (ctx, input) => {
-        return await requestResearch(input.query, input.type);
+      pollForImplementation: async (_ctx, input) => {
+        if (!ghProjectClient) return { prNumber: null, timedOut: true, blocked: false };
+        const { result, timedOut, blocked } = await pollGithubForCompletion(
+          async () => {
+            const prs = await ghProjectClient!.getIssuePRs(input.repoOwner, input.repoName, input.issueNumber);
+            if (prs.length > 0) return prs[0].number;
+            return null;
+          },
+          async () => {
+            const col = await ghProjectClient!.getItemColumn(input.projectItemId);
+            return col === "Blocked";
+          },
+          input.timeoutMinutes
+        );
+        return { prNumber: result, timedOut, blocked };
+      },
+
+      pollForTestResults: async (_ctx, input) => {
+        if (!ghProjectClient) return { testContent: "", timedOut: true, blocked: false };
+        const { result, timedOut, blocked } = await pollGithubForCompletion(
+          async () => {
+            const comments = await ghProjectClient!.getIssueComments(input.repoOwner, input.repoName, input.issueNumber);
+            for (const comment of comments.reverse()) {
+              if (comment.body.includes("test") && (comment.body.includes("pass") || comment.body.includes("fail") || comment.body.includes("PASS") || comment.body.includes("FAIL"))) {
+                return comment.body;
+              }
+            }
+            return null;
+          },
+          async () => {
+            const col = await ghProjectClient!.getItemColumn(input.projectItemId);
+            return col === "Blocked";
+          },
+          input.timeoutMinutes
+        );
+        return { testContent: result ?? "", timedOut, blocked };
+      },
+
+      evaluateTestResults: async (_ctx, input) => {
+        const { text } = await tracedGenerateText({
+          agentId: AGENT_ID,
+          traceId: crypto.randomUUID(),
+          model: llm(LLM_MODEL) as any,
+          system: "You evaluate test results. Respond with JSON: { passed: boolean, failures: string[] }",
+          prompt: `Evaluate these test results for issue #${input.issueNumber}:\n\n${input.testContent}`,
+          eventLog: eventLog ?? undefined,
+        });
+        try {
+          return JSON.parse(text);
+        } catch {
+          return { passed: false, failures: ["Failed to parse test evaluation"] };
+        }
+      },
+
+      waitForDeployment: async (_ctx, input) => {
+        const deadline = Date.now() + input.timeoutMinutes * 60 * 1000;
+        while (Date.now() < deadline) {
+          try {
+            const res = await fetch(input.healthUrl, { signal: AbortSignal.timeout(5000) });
+            if (res.ok) return { healthy: true, timedOut: false };
+          } catch { /* retry */ }
+          await new Promise((r) => setTimeout(r, 15_000));
+        }
+        return { healthy: false, timedOut: true };
+      },
+
+      validateDeployment: async (_ctx, input) => {
+        const results = await runSmokeTests(input.healthUrl);
+        const failures = results.filter((r) => !r.success).map((r) => `${r.method} ${r.endpoint}: ${r.error}`);
+        return { passed: failures.length === 0, failures };
+      },
+
+      createBugIssue: async (_ctx, input) => {
+        if (!ghProjectClient) return { issueNumber: 0, url: "" };
+        const title = `[Bug] Test failures from issue #${input.parentIssueNumber}`;
+        const body = `## Test Failures\n\n${input.failures.map((f, i) => `${i + 1}. ${f}`).join("\n")}\n\nParent issue: #${input.parentIssueNumber}`;
+        const { number, url } = await ghProjectClient.createIssue(input.repoOwner, input.repoName, title, body, ["bug", "test-failure", "mesh-six"]);
+        return { issueNumber: number, url };
+      },
+
+      notifyBlocked: async (_ctx, input) => {
+        if (!input.ntfyTopic) return;
+        await fetch(`https://ntfy.sh/${input.ntfyTopic}`, {
+          method: "POST",
+          body: `Issue #${input.issueNumber} (${input.repoOwner}/${input.repoName}) is BLOCKED:\n${input.question}`,
+          headers: { Title: `mesh-six: Issue #${input.issueNumber} Blocked`, Priority: "high" },
+        }).catch((e) => console.warn(`[${AGENT_ID}] ntfy.sh notification failed:`, e));
+      },
+
+      notifyTimeout: async (_ctx, input) => {
+        if (!input.ntfyTopic) return;
+        await fetch(`https://ntfy.sh/${input.ntfyTopic}`, {
+          method: "POST",
+          body: `Issue #${input.issueNumber} (${input.repoOwner}/${input.repoName}) timed out in ${input.phase} phase`,
+          headers: { Title: `mesh-six: Phase timeout`, Priority: "default" },
+        }).catch((e) => console.warn(`[${AGENT_ID}] ntfy.sh notification failed:`, e));
+      },
+
+      reportSuccess: async (_ctx, input) => {
+        if (eventLog) {
+          await eventLog.emit({
+            traceId: input.workflowId,
+            agentId: AGENT_ID,
+            eventType: "workflow.completed",
+            payload: { issueNumber: input.issueNumber, repoOwner: input.repoOwner, repoName: input.repoName },
+          });
+        }
+        await updateStatus(input.workflowId, "completed");
+      },
+
+      moveToFailed: async (_ctx, input) => {
+        if (eventLog) {
+          await eventLog.emit({
+            traceId: input.workflowId,
+            agentId: AGENT_ID,
+            eventType: "workflow.failed",
+            payload: { issueNumber: input.issueNumber, reason: input.reason },
+          });
+        }
+        await updateStatus(input.workflowId, "failed");
       },
     };
 
