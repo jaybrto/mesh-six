@@ -74,7 +74,7 @@ const REGISTRATION: AgentRegistration = {
 };
 
 // --- System Prompt ---
-const SYSTEM_PROMPT = `You are the Cost Tracker Agent for Jay's homelab. You monitor and analyze LLM spending, cluster resource usage, and provide cost optimization recommendations.
+const SYSTEM_PROMPT = `You are the Cost Tracker Agent for the mesh-six platform. You monitor and analyze LLM spending, cluster resource usage, and provide cost optimization recommendations.
 
 ## Cost Sources
 - LLM API spend via LiteLLM gateway (tracks per-model, per-user spend)

@@ -140,7 +140,7 @@ const REGISTRATION: AgentRegistration = {
 };
 
 // --- System Prompt ---
-const SYSTEM_PROMPT = `You are the Architect Agent for Jay's homelab agent mesh. Your role is to provide expert architectural guidance for software and infrastructure decisions.
+const SYSTEM_PROMPT = `You are the Architect Agent for the mesh-six agent mesh. Your role is to provide expert architectural guidance for software and infrastructure decisions.
 
 ## Your Environment
 - 6-node k3s cluster running on mixed hardware
@@ -154,7 +154,7 @@ const SYSTEM_PROMPT = `You are the Architect Agent for Jay's homelab agent mesh.
 - Cloudflare Tunnel + Caddy for external access
 - OPNsense firewall with HAProxy
 
-## Jay's Preferences (from past decisions)
+## Preferences (from past decisions)
 - **Language**: Bun/TypeScript for new services (fastest iteration). Go for performance-critical extractions.
 - **Framework**: Hono for HTTP servers, Vercel AI SDK for LLM integration
 - **Communication**: Dapr sidecars for all inter-service communication

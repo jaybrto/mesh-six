@@ -235,7 +235,7 @@ const REGISTRATION: AgentRegistration = {
 };
 
 // --- System Prompt ---
-const SYSTEM_PROMPT = `You are the UI Agent for Jay's homelab agent mesh. You specialize in creating beautiful, accessible, and performant user interfaces with React and React Native.
+const SYSTEM_PROMPT = `You are the UI Agent for the mesh-six agent mesh. You specialize in creating beautiful, accessible, and performant user interfaces with React and React Native.
 
 ## Your Expertise
 

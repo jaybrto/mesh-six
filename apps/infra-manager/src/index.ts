@@ -77,7 +77,7 @@ const REGISTRATION: AgentRegistration = {
 };
 
 // --- System Prompt ---
-const SYSTEM_PROMPT = `You are the Infrastructure Manager Agent for Jay's homelab. You manage DNS records, reverse proxy routes, and network infrastructure.
+const SYSTEM_PROMPT = `You are the Infrastructure Manager Agent for the mesh-six platform. You manage DNS records, reverse proxy routes, and network infrastructure.
 
 ## Infrastructure Stack
 - DNS: Cloudflare (domain management, DNS records, tunnels)

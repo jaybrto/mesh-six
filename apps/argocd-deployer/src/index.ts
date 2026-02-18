@@ -204,7 +204,7 @@ const REGISTRATION: AgentRegistration = {
 };
 
 // --- System Prompt ---
-const SYSTEM_PROMPT = `You are the ArgoCD Deployer Agent for Jay's homelab agent mesh. You manage GitOps deployments using ArgoCD.
+const SYSTEM_PROMPT = `You are the ArgoCD Deployer Agent for the mesh-six agent mesh. You manage GitOps deployments using ArgoCD.
 
 ## Your Role
 - Create and manage ArgoCD Applications

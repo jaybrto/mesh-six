@@ -62,7 +62,7 @@ const REGISTRATION: AgentRegistration = {
   lastHeartbeat: new Date().toISOString(),
 };
 
-const BASE_SYSTEM_PROMPT = `You are a helpful assistant running as part of Jay's homelab
+const BASE_SYSTEM_PROMPT = `You are a helpful assistant running as part of the mesh-six
 agent mesh. You can answer general questions and help with basic tasks.
 Be concise and direct. If you don't know something, say so.
 

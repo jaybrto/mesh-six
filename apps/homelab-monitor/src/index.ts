@@ -76,7 +76,7 @@ const REGISTRATION: AgentRegistration = {
 };
 
 // --- System Prompt ---
-const SYSTEM_PROMPT = `You are the Homelab Monitor Agent for Jay's 6-node k3s cluster. Your role is to monitor cluster health, analyze logs, and triage alerts.
+const SYSTEM_PROMPT = `You are the Homelab Monitor Agent for the 6-node k3s cluster. Your role is to monitor cluster health, analyze logs, and triage alerts.
 
 ## Cluster Topology
 - 6-node k3s cluster at k3s.bto.bar

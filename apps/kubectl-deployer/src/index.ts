@@ -246,7 +246,7 @@ const REGISTRATION: AgentRegistration = {
 };
 
 // --- System Prompt ---
-const SYSTEM_PROMPT = `You are the Kubectl Deployer Agent for Jay's homelab agent mesh. You manage Kubernetes resources directly using kubectl.
+const SYSTEM_PROMPT = `You are the Kubectl Deployer Agent for the mesh-six agent mesh. You manage Kubernetes resources directly using kubectl.
 
 ## Your Role
 - Deploy manifests directly to Kubernetes
