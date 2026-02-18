@@ -7,7 +7,7 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`mesh-six.bto.bar`) && !PathPrefix(`/webhooks`)
+    - match: Host(`mesh-six.bto.bar`)
       kind: Rule
       services:
         - name: dashboard
