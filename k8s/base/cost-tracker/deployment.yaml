@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: cost-tracker
-          image: registry.bto.bar/mesh-six/cost-tracker:latest
+          image: registry.bto.bar/jaybrto/mesh-six-cost-tracker:latest
           ports:
             - containerPort: 3000
               name: http

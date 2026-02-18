@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: event-logger
-          image: registry.bto.bar/mesh-six/event-logger:latest
+          image: registry.bto.bar/jaybrto/mesh-six-event-logger:latest
           ports:
             - containerPort: 3000
               name: http

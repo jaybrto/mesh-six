@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: dashboard
-          image: registry.bto.bar/mesh-six/dashboard:latest
+          image: registry.bto.bar/jaybrto/mesh-six-dashboard:latest
           ports:
             - containerPort: 80
               name: http

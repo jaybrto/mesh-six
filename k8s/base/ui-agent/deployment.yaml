@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: ui-agent
-          image: registry.bto.bar/mesh-six/ui-agent:latest
+          image: registry.bto.bar/jaybrto/mesh-six-ui-agent:latest
           ports:
             - containerPort: 3000
               name: http

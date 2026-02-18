@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: argocd-deployer
-          image: registry.bto.bar/mesh-six/argocd-deployer:latest
+          image: registry.bto.bar/jaybrto/mesh-six-argocd-deployer:latest
           ports:
             - containerPort: 3000
               name: http

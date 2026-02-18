@@ -6,6 +6,7 @@ namespace: mesh-six
 resources:
   - namespace.yaml
   - secrets.yaml
+  - vault-external-secrets.yaml
   - orchestrator/
   - simple-agent/
   - architect-agent/
@@ -26,3 +27,18 @@ resources:
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six
+
+# Add imagePullSecrets to all Deployments for Gitea registry auth
+patches:
+  - target:
+      kind: Deployment
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: placeholder
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: gitea-registry-secret

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       agent:
-        description: "Specific agent to build (leave empty to auto-detect)"
+        description: "Specific agent to build (leave empty to auto-detect), or 'all'"
         required: false
         type: string
 
@@ -14,9 +14,15 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Internal Gitea service for Kaniko push (HTTP, no TLS issues)
+  REGISTRY: gitea-http.gitea-system.svc.cluster.local:3000
+  ORG: jaybrto
+  IMAGE_PREFIX: mesh-six
+
 jobs:
   detect-changes:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       agents: ${{ steps.filter.outputs.agents }}
       core-changed: ${{ steps.filter.outputs.core-changed }}
@@ -28,22 +34,6 @@ jobs:
       - name: Detect changed agents
         id: filter
         run: |
-          if [ -n "${{ inputs.agent }}" ]; then
-            echo 'agents=["${{ inputs.agent }}"]' >> "$GITHUB_OUTPUT"
-            echo "core-changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
-
-          CORE_CHANGED=false
-          if echo "$CHANGED_FILES" | grep -q '^packages/core/'; then
-            CORE_CHANGED=true
-          fi
-          echo "core-changed=$CORE_CHANGED" >> "$GITHUB_OUTPUT"
-
-          AGENTS=()
-          # Agents that use the shared Dockerfile (excludes dashboard)
           BUILDABLE_AGENTS=(
             api-coder
             architect-agent
@@ -62,6 +52,27 @@ jobs:
             ui-agent
             webhook-receiver
           )
+
+          if [ -n "${{ inputs.agent }}" ]; then
+            if [ "${{ inputs.agent }}" = "all" ]; then
+              JSON=$(printf '%s\n' "${BUILDABLE_AGENTS[@]}" | jq -R . | jq -sc .)
+              echo "agents=$JSON" >> "$GITHUB_OUTPUT"
+            else
+              echo 'agents=["${{ inputs.agent }}"]' >> "$GITHUB_OUTPUT"
+            fi
+            echo "core-changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+
+          CORE_CHANGED=false
+          if echo "$CHANGED_FILES" | grep -q '^packages/core/'; then
+            CORE_CHANGED=true
+          fi
+          echo "core-changed=$CORE_CHANGED" >> "$GITHUB_OUTPUT"
+
+          AGENTS=()
 
           for agent in "${BUILDABLE_AGENTS[@]}"; do
             if echo "$CHANGED_FILES" | grep -q "^apps/${agent}/"; then
@@ -90,7 +101,7 @@ jobs:
           fi
 
   core-tests:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
@@ -110,7 +121,7 @@ jobs:
   build-push:
     needs: [detect-changes, core-tests]
     if: ${{ needs.detect-changes.outputs.agents != '[]' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       fail-fast: false
       matrix:
@@ -118,26 +129,110 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to registry
-        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login registry.bto.bar -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
-
-      - name: Set image tags
-        id: tags
+      - name: Get metadata
+        id: meta
         run: |
-          SHA=$(git rev-parse --short HEAD)
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "image=registry.bto.bar/mesh-six/${{ matrix.agent }}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$(date +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"
+          PROXY_IP=$(kubectl get svc gitea-auth-proxy -o jsonpath='{.spec.clusterIP}')
+          echo "proxy_ip=${PROXY_IP}" >> "$GITHUB_OUTPUT"
 
-      - name: Build Docker image
+      - name: Build with Kaniko
         run: |
-          docker build \
-            -f docker/Dockerfile.agent \
-            --build-arg AGENT_APP=${{ matrix.agent }} \
-            -t ${{ steps.tags.outputs.image }}:latest \
-            -t ${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.sha }} \
-            .
+          DEST="${{ env.REGISTRY }}/${{ env.ORG }}/${{ env.IMAGE_PREFIX }}-${{ matrix.agent }}"
+          cat <<EOF | kubectl apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: kaniko-mesh-six-${{ matrix.agent }}-${{ github.run_id }}
+            namespace: default
+          spec:
+            restartPolicy: Never
+            hostAliases:
+              - ip: "${{ steps.meta.outputs.proxy_ip }}"
+                hostnames:
+                  - gitea.k3s.bto.bar
+            initContainers:
+              - name: setup-certs
+                image: alpine:latest
+                command: ["sh", "-c", "cat /etc/ssl/certs/ca-certificates.crt /custom-ca/ca.crt > /certs/ca-certificates.crt"]
+                volumeMounts:
+                  - name: merged-certs
+                    mountPath: /certs
+                  - name: custom-ca
+                    mountPath: /custom-ca
+            containers:
+              - name: kaniko
+                image: gcr.io/kaniko-project/executor:latest
+                env:
+                  - name: SSL_CERT_FILE
+                    value: /certs/ca-certificates.crt
+                args:
+                  - "--dockerfile=docker/Dockerfile.agent"
+                  - "--context=git://github.com/${{ github.repository }}.git#refs/heads/${{ github.ref_name }}"
+                  - "--build-arg=AGENT_APP=${{ matrix.agent }}"
+                  - "--destination=${DEST}:latest"
+                  - "--destination=${DEST}:${{ steps.meta.outputs.sha_short }}"
+                  - "--destination=${DEST}:${{ steps.meta.outputs.timestamp }}"
+                  - "--cache=true"
+                  - "--cache-repo=${DEST}/cache"
+                  - "--insecure-registry=${{ env.REGISTRY }}"
+                volumeMounts:
+                  - name: docker-config
+                    mountPath: /kaniko/.docker
+                  - name: merged-certs
+                    mountPath: /certs
+            volumes:
+              - name: docker-config
+                secret:
+                  secretName: gitea-registry-push
+                  items:
+                    - key: .dockerconfigjson
+                      path: config.json
+              - name: custom-ca
+                configMap:
+                  name: gitea-proxy-ca
+              - name: merged-certs
+                emptyDir: {}
+          EOF
 
-      - name: Push Docker image
+      - name: Wait for build
         run: |
-          docker push ${{ steps.tags.outputs.image }}:latest
-          docker push ${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.sha }}
+          POD_NAME="kaniko-mesh-six-${{ matrix.agent }}-${{ github.run_id }}"
+          echo "Waiting for ${{ matrix.agent }} build..."
+          kubectl wait --for=condition=Ready "pod/${POD_NAME}" --timeout=120s 2>/dev/null || true
+          while true; do
+            STATUS=$(kubectl get pod "${POD_NAME}" -o jsonpath='{.status.phase}')
+            echo "Build status: $STATUS"
+            if [ "$STATUS" = "Succeeded" ]; then
+              echo "Build completed successfully!"
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "Build failed!"
+              kubectl logs "${POD_NAME}"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Show build logs
+        if: always()
+        run: kubectl logs "kaniko-mesh-six-${{ matrix.agent }}-${{ github.run_id }}" 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: kubectl delete pod "kaniko-mesh-six-${{ matrix.agent }}-${{ github.run_id }}" --ignore-not-found
+
+  deploy:
+    needs: [detect-changes, build-push]
+    if: always() && !failure() && !cancelled() && needs.detect-changes.outputs.agents != '[]'
+    runs-on: self-hosted
+    steps:
+      - name: Restart updated deployments
+        run: |
+          AGENTS='${{ needs.detect-changes.outputs.agents }}'
+          for agent in $(echo "$AGENTS" | jq -r '.[]'); do
+            echo "Restarting ${agent}..."
+            kubectl -n mesh-six rollout restart "deployment/${agent}" 2>/dev/null || true
+            kubectl -n mesh-six rollout status "deployment/${agent}" --timeout=120s 2>/dev/null || true
+          done

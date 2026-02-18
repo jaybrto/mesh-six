@@ -7,35 +7,37 @@ resources:
 namespace: mesh-six
 
 images:
-  - name: registry.bto.bar/mesh-six/orchestrator
+  - name: registry.bto.bar/jaybrto/mesh-six-orchestrator
     newTag: latest
-  - name: registry.bto.bar/mesh-six/simple-agent
+  - name: registry.bto.bar/jaybrto/mesh-six-simple-agent
     newTag: latest
-  - name: registry.bto.bar/mesh-six/architect-agent
+  - name: registry.bto.bar/jaybrto/mesh-six-architect-agent
     newTag: latest
-  - name: registry.bto.bar/mesh-six/researcher-agent
+  - name: registry.bto.bar/jaybrto/mesh-six-researcher-agent
     newTag: latest
-  - name: registry.bto.bar/mesh-six/project-manager
+  - name: registry.bto.bar/jaybrto/mesh-six-project-manager
     newTag: latest
-  - name: registry.bto.bar/mesh-six/qa-tester
+  - name: registry.bto.bar/jaybrto/mesh-six-qa-tester
     newTag: latest
-  - name: registry.bto.bar/mesh-six/api-coder
+  - name: registry.bto.bar/jaybrto/mesh-six-api-coder
     newTag: latest
-  - name: registry.bto.bar/mesh-six/ui-agent
+  - name: registry.bto.bar/jaybrto/mesh-six-ui-agent
     newTag: latest
-  - name: registry.bto.bar/mesh-six/argocd-deployer
+  - name: registry.bto.bar/jaybrto/mesh-six-argocd-deployer
     newTag: latest
-  - name: registry.bto.bar/mesh-six/kubectl-deployer
+  - name: registry.bto.bar/jaybrto/mesh-six-kubectl-deployer
     newTag: latest
-  - name: registry.bto.bar/mesh-six/claude-mqtt-bridge
+  - name: registry.bto.bar/jaybrto/mesh-six-claude-mqtt-bridge
     newTag: latest
-  - name: registry.bto.bar/mesh-six/homelab-monitor
+  - name: registry.bto.bar/jaybrto/mesh-six-homelab-monitor
     newTag: latest
-  - name: registry.bto.bar/mesh-six/infra-manager
+  - name: registry.bto.bar/jaybrto/mesh-six-infra-manager
     newTag: latest
-  - name: registry.bto.bar/mesh-six/cost-tracker
+  - name: registry.bto.bar/jaybrto/mesh-six-cost-tracker
     newTag: latest
-  - name: registry.bto.bar/mesh-six/dashboard
+  - name: registry.bto.bar/jaybrto/mesh-six-dashboard
     newTag: latest
-  - name: registry.bto.bar/mesh-six/webhook-receiver
+  - name: registry.bto.bar/jaybrto/mesh-six-event-logger
+    newTag: latest
+  - name: registry.bto.bar/jaybrto/mesh-six-webhook-receiver
     newTag: latest

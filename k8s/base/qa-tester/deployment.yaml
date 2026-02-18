@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: qa-tester
-          image: registry.bto.bar/mesh-six/qa-tester:latest
+          image: registry.bto.bar/jaybrto/mesh-six-qa-tester:latest
           ports:
             - containerPort: 3000
               name: http

@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: claude-mqtt-bridge
-          image: registry.bto.bar/mesh-six/claude-mqtt-bridge:latest
+          image: registry.bto.bar/jaybrto/mesh-six-claude-mqtt-bridge:latest
           ports:
             - containerPort: 3000
               name: http

@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: homelab-monitor
-          image: registry.bto.bar/mesh-six/homelab-monitor:latest
+          image: registry.bto.bar/jaybrto/mesh-six-homelab-monitor:latest
           ports:
             - containerPort: 3000
               name: http

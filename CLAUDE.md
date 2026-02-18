@@ -22,8 +22,9 @@ bun test packages/core/src/scoring.test.ts       # Run one test file
 # Database
 bun run db:migrate                               # Apply pending SQL migrations (needs DATABASE_URL or PG_PRIMARY_URL)
 
-# Docker
-docker build -f docker/Dockerfile.agent --build-arg AGENT_APP=simple-agent -t registry.bto.bar/mesh-six/simple-agent:latest .
+# Container builds (Kaniko in k3s — no local Docker)
+# CI triggers builds automatically. Manual build via Kaniko pod:
+# See .github/workflows/build-deploy.yaml for the Kaniko pod template
 
 # K8s
 kubectl apply -k k8s/overlays/prod               # Deploy all services
@@ -89,7 +90,7 @@ Defined in `dapr/components/`:
 
 ### K8s Manifests
 
-Kustomize-based in `k8s/base/` with overlays in `k8s/overlays/{dev,prod}`. Each agent has its own subdirectory with Deployment + Service. Shared Dockerfile at `docker/Dockerfile.agent` parameterized by `AGENT_APP` build arg. Container registry: `registry.bto.bar/mesh-six/{agent-name}`.
+Kustomize-based in `k8s/base/` with overlays in `k8s/overlays/{dev,prod}`. Each agent has its own subdirectory with Deployment + Service. Shared Dockerfile at `docker/Dockerfile.agent` parameterized by `AGENT_APP` build arg. Container registry: `registry.bto.bar/jaybrto/mesh-six-{agent-name}` (Gitea via external Caddy proxy for pull; CI pushes to internal `gitea-http.gitea-system.svc.cluster.local:3000`). Vault + External Secrets Operator syncs secrets from `secret/data/mesh-six`.
 
 ## Conventions
 
@@ -111,7 +112,7 @@ Kustomize-based in `k8s/base/` with overlays in `k8s/overlays/{dev,prod}`. Each 
 
 ## CI/CD
 
-- `.github/workflows/build-deploy.yaml`: Matrix build, change detection (rebuilds only affected agents + all if core changes), pushes to `registry.bto.bar` with `:latest` and `:{sha}` tags
+- `.github/workflows/build-deploy.yaml`: Matrix build via Kaniko on self-hosted runner, change detection (rebuilds only affected agents + all if core changes), pushes to internal Gitea registry (`gitea-http.gitea-system.svc.cluster.local:3000/jaybrto/mesh-six-{agent}`) with `:latest` and `:{sha}` tags
 - `.github/workflows/test.yaml`: PR validation — core typecheck + tests, matrix typecheck for changed apps
 - ArgoCD Application at `k8s/argocd-application.yaml` with automated sync, prune, selfHeal
 

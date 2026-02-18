@@ -19,7 +19,7 @@ You manage Kubernetes manifests, Kustomize configuration, and Dapr component def
 - **Cluster**: k3s homelab at `k3s.bto.bar`
 - **Namespace**: `mesh-six`
 - **GitOps**: ArgoCD manages deployments
-- **Container registry**: `registry.bto.bar`
+- **Container registry (pull)**: `registry.bto.bar/jaybrto` (Gitea via external Caddy proxy)
 - **Config management**: Kustomize (base + overlays)
 - **Service mesh**: Dapr sidecars on every agent pod
 
@@ -51,7 +51,7 @@ dapr/
 Every agent deployment includes:
 
 - `metadata.annotations`: Dapr sidecar annotations (`dapr.io/enabled`, `dapr.io/app-id`, `dapr.io/app-port`)
-- `spec.containers[0].image`: `registry.bto.bar/mesh-six/{agent-name}:latest`
+- `spec.containers[0].image`: `registry.bto.bar/jaybrto/mesh-six-{agent-name}:latest`
 - `spec.containers[0].ports`: containerPort 3000 (all agents use port 3000)
 - `spec.containers[0].envFrom`: secretRef to `mesh-six-secrets`
 - `spec.containers[0].env`: Agent-specific env vars (AGENT_ID, AGENT_CAPABILITIES, etc.)
@@ -81,4 +81,4 @@ Every agent deployment includes:
 - Dapr app-id must match the agent's AGENT_ID env var
 - Use Kustomize patches in overlays for env-specific changes, not inline edits to base
 - Include resource requests AND limits in all deployments
-- Container images use `registry.bto.bar/mesh-six/{agent-name}:{tag}` format
+- Container images use `registry.bto.bar/jaybrto/mesh-six-{agent-name}:{tag}` format (pull via external Caddy proxy)

@@ -26,7 +26,7 @@ spec:
       serviceAccountName: kubectl-deployer
       containers:
         - name: kubectl-deployer
-          image: registry.bto.bar/mesh-six/kubectl-deployer:latest
+          image: registry.bto.bar/jaybrto/mesh-six-kubectl-deployer:latest
           ports:
             - containerPort: 3000
               name: http

@@ -1,0 +1,72 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile for mesh-six agents that need Claude Code CLI.
+# Use this instead of Dockerfile.agent when the agent spawns `claude` subprocess.
+# Build: docker build -f docker/Dockerfile.claude-agent --build-arg AGENT_APP=<name> .
+
+# --- Builder (same as Dockerfile.agent) ---
+FROM oven/bun:1.2 AS builder
+
+WORKDIR /app
+
+COPY package.json bunfig.toml ./
+COPY packages/core/package.json ./packages/core/
+ARG AGENT_APP=simple-agent
+COPY apps/${AGENT_APP}/package.json ./apps/${AGENT_APP}/
+
+RUN bun install --frozen-lockfile
+
+COPY tsconfig.json ./
+COPY packages/core/ ./packages/core/
+COPY apps/${AGENT_APP}/ ./apps/${AGENT_APP}/
+
+RUN bun build apps/${AGENT_APP}/src/index.ts \
+    --target=bun \
+    --outdir=dist \
+    --minify
+
+# --- Runtime: Node.js (for Claude Code CLI) + Bun (for agent) ---
+FROM node:22-bookworm-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    jq \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Bun runtime
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+# Install Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code && \
+    npm cache clean --force
+
+# Create app user and directories
+RUN useradd -m -d /home/app -s /bin/bash app && \
+    mkdir -p /home/app/.claude && \
+    chown -R app:app /home/app
+
+# Reinstall bun for the app user
+USER app
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/home/app/.bun/bin:${PATH}"
+
+# Pre-seed headless settings (non-sensitive, safe to bake into image)
+RUN echo '{"skipDangerousModePermissionPrompt":true,"theme":"dark","hasCompletedOnboarding":true}' \
+    > /home/app/.claude/settings.json && \
+    chmod 600 /home/app/.claude/settings.json
+
+WORKDIR /app
+
+# Copy built output and entrypoint
+COPY --from=builder --chown=app:app /app/dist ./
+COPY --chown=app:app docker/preload-claude-config.sh /usr/local/bin/preload-claude-config.sh
+
+ENV CI=true
+
+EXPOSE 3000
+
+CMD ["bun", "run", "index.js"]

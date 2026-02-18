@@ -76,3 +76,11 @@ export {
   tracedGenerateText,
   type TraceContext,
 } from "./ai.js";
+
+// Claude Code CLI auth & config
+export {
+  preloadClaudeConfig,
+  detectAuthFailure,
+  checkAuthEnvironment,
+  ClaudeAuthError,
+} from "./claude.js";

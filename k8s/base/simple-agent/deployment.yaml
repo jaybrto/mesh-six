@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: simple-agent
-          image: registry.bto.bar/mesh-six/simple-agent:latest
+          image: registry.bto.bar/jaybrto/mesh-six-simple-agent:latest
           ports:
             - containerPort: 3000
               name: http

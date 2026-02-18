@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: orchestrator
-          image: registry.bto.bar/mesh-six/orchestrator:latest
+          image: registry.bto.bar/jaybrto/mesh-six-orchestrator:latest
           ports:
             - containerPort: 3000
               name: http
