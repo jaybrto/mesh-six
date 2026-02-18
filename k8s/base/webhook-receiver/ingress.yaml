@@ -1,0 +1,16 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: webhook-receiver
+  namespace: mesh-six
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`mesh-six.bto.bar`) && PathPrefix(`/webhooks`)
+      kind: Rule
+      services:
+        - name: webhook-receiver
+          port: 80
+  tls:
+    certResolver: letsencrypt
