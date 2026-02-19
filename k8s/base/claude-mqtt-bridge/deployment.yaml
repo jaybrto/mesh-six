@@ -7,7 +7,10 @@ metadata:
     app: claude-mqtt-bridge
     app.kubernetes.io/part-of: mesh-six
 spec:
-  replicas: 1
+  # claude-mqtt-bridge reads from stdin (Claude Code hook processor).
+  # It is NOT a standalone server — it runs as a sidecar alongside Claude Code pods.
+  # Scale to 0 until Claude Code agent pods are deployed that feed it stdin events.
+  replicas: 0
   selector:
     matchLabels:
       app: claude-mqtt-bridge
