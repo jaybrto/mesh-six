@@ -38,11 +38,6 @@ import {
   pollGithubForCompletion,
   type ProjectWorkflowInput,
   type WorkflowActivityImplementations,
-  type ConsultArchitectOutput,
-  type ReviewPlanOutput,
-  type EvaluateTestResultsOutput,
-  type ValidateDeploymentOutput,
-  type WaitForDeploymentOutput,
 } from "./workflow.js";
 
 // --- Configuration ---
@@ -67,9 +62,6 @@ const GITEA_TOKEN = process.env.GITEA_TOKEN || "";
 // GitHub Projects Configuration
 const GITHUB_PROJECT_ID = process.env.GITHUB_PROJECT_ID || "";
 const GITHUB_STATUS_FIELD_ID = process.env.GITHUB_STATUS_FIELD_ID || "";
-
-// Notification Configuration
-const NTFY_TOPIC = process.env.NTFY_TOPIC || "";
 
 // MQTT Configuration
 const MQTT_URL = process.env.MQTT_URL || "mqtt://rabbitmq.rabbitmq:1883";
@@ -535,7 +527,7 @@ async function createGiteaIssue(
       throw new Error(`Gitea API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as { number: number; html_url: string };
     return {
       issueNumber: data.number,
       url: data.html_url,

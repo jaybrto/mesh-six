@@ -1,11 +1,9 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { Pool } from "pg";
 import {
   AgentRegistry,
   AgentMemory,
   createAgentMemoryFromEnv,
-  EventLog,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -24,7 +22,6 @@ const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://bto-mini.bto.bar:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3.5";
 const MEMORY_ENABLED = process.env.MEMORY_ENABLED !== "false";
-const DATABASE_URL = process.env.DATABASE_URL || process.env.PG_PRIMARY_URL || "";
 
 // --- Native Ollama HTTP Client ---
 async function generateWithOllama(prompt: string, systemPrompt: string): Promise<string> {
@@ -53,14 +50,6 @@ const registry = new AgentRegistry(daprClient);
 
 // --- Memory Layer ---
 let memory: AgentMemory | null = null;
-
-// --- Event Log ---
-let eventLog: EventLog | null = null;
-if (DATABASE_URL) {
-  const pool = new Pool({ connectionString: DATABASE_URL });
-  eventLog = new EventLog(pool);
-  console.log(`[${AGENT_ID}] Event log initialized`);
-}
 
 // --- Agent Registration Definition ---
 const REGISTRATION: AgentRegistration = {
