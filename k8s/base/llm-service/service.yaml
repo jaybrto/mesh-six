@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-service
+  namespace: mesh-six
+  labels:
+    app: llm-service
+    app.kubernetes.io/part-of: mesh-six
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 3000
+      protocol: TCP
+      name: http
+  selector:
+    app: llm-service

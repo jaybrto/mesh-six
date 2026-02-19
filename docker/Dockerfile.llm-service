@@ -1,0 +1,47 @@
+# syntax=docker/dockerfile:1
+
+# LLM Service Dockerfile
+# Extends the standard agent Dockerfile with Claude CLI installation.
+
+FROM registry.bto.bar/jaybrto/bun:1.2 AS builder
+
+WORKDIR /app
+
+# Copy workspace manifests first (layer cache)
+COPY package.json bunfig.toml bun.lock* ./
+COPY packages/core/package.json ./packages/core/
+COPY apps/llm-service/package.json ./apps/llm-service/
+
+RUN bun install
+
+# Copy source
+COPY tsconfig.json ./
+COPY packages/core/ ./packages/core/
+COPY apps/llm-service/ ./apps/llm-service/
+
+# --- Runtime ---
+FROM registry.bto.bar/jaybrto/bun:1.2-slim
+
+WORKDIR /app
+
+# Install Claude CLI globally
+# The CLI is an npm package that runs on Node.js/Bun
+RUN bun install -g @anthropic-ai/claude-code && \
+    # Install tar for credential archive operations
+    apt-get update -qq && apt-get install -y -qq tar && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy installed deps + source
+COPY --from=builder /app .
+
+# Create base directory for actor config dirs
+RUN mkdir -p /tmp/llm-service/actors && chown -R bun:bun /tmp/llm-service
+
+ENV AGENT_ENTRY="apps/llm-service/src/index.ts"
+
+# Run as non-root
+USER bun
+
+EXPOSE 3000
+
+CMD ["sh", "-c", "bun run ${AGENT_ENTRY}"]

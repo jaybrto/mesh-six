@@ -1,0 +1,13 @@
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: llm-service-config
+  namespace: mesh-six
+spec:
+  # Actor runtime configuration
+  # The Dapr placement service manages actor distribution across nodes
+  # If a node dies, actors are rescheduled automatically
+  tracing:
+    samplingRate: "1"
+  metric:
+    enabled: true

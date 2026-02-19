@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-19: LLM Service (Dapr Actor-based Claude CLI Gateway)
+
+#### New Service: LLM Service
+- **@mesh-six/llm-service@0.1.0**: Centralized Claude CLI gateway with Dapr actor concurrency control
+  - OpenAI-compatible `/v1/chat/completions` endpoint — agents swap `LITELLM_BASE_URL` to use CLI instead of API
+  - Dapr actor runtime implemented directly in Hono (no DaprServer dependency)
+    - `ClaudeCLIActor` type: one actor per credential set, turn-based concurrency (no 429s)
+    - Dapr placement service handles actor scheduling across nodes
+    - Timer-based credential sync back to MinIO (configurable interval)
+  - MinIO credential management: download/extract tar.gz archives on actor activation, sync back on timer and deactivation
+  - Per-actor config isolation: each actor gets its own `CLAUDE_CONFIG_DIR` with separate credentials, settings, skills, and MCP server configs
+  - Capability-aware actor routing: route requests to actors with matching skills, LRU selection among idle actors
+  - Session persistence: optional session save/restore via MinIO for multi-turn conversations
+  - Model selection with allowlist: validate requested model against Dapr config, reject unsupported models
+  - Hook event publisher (`hooks/event-publisher.ts`): Bun script receives CLI hook events via stdin, publishes to Dapr pub/sub (`llm.events` topic) for real-time MQTT streaming
+  - OpenAI compatibility layer: maps chat completion requests to `claude -p --output-format json`, structured output via schema injection into prompts
+  - `/v1/models` endpoint lists allowed models, `/status` shows actor health and service metrics
+  - Custom Dockerfile (`docker/Dockerfile.llm-service`) with Claude CLI pre-installed
+  - K8s manifests with Dapr actor config, dedicated actor state store (Redis, scoped to llm-service)
+
+#### Core Library
+- **@mesh-six/core@0.6.0**: LLM service types and constants
+  - `ChatCompletionRequest/Response` Zod schemas (OpenAI-compatible)
+  - `ActorInfo`, `ActorStatus`, `LLMServiceStatus` schemas for actor management
+  - `CLIHookEvent` schema for hook event publishing
+  - Constants: `DAPR_LLM_SERVICE_APP_ID`, `LLM_EVENTS_TOPIC`, `LLM_ACTOR_TYPE`, `LLM_CONFIG_KEYS`
+
+#### Infrastructure
+- K8s manifests for llm-service (Deployment + Service + Dapr Configuration)
+- `statestore-actor-redis.yaml`: Dedicated Redis state store with `actorStateStore: "true"`, scoped to llm-service
+- Added llm-service to `k8s/base/kustomization.yaml`
+
 ### Added - 2026-02-19: Context Service
 
 #### New Service: Context Compression Proxy
