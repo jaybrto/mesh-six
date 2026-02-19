@@ -1,4 +1,4 @@
-FROM oven/bun:1.2 AS builder
+FROM registry.bto.bar/jaybrto/bun:1.2 AS builder
 WORKDIR /app
 
 # Copy workspace manifests first (cached if only source changes, not deps)
@@ -20,7 +20,7 @@ ENV VITE_MQTT_URL=${VITE_MQTT_URL}
 
 RUN cd apps/dashboard && bun run build
 
-FROM nginx:alpine
+FROM registry.bto.bar/jaybrto/nginx:alpine
 COPY --from=builder /app/apps/dashboard/dist /usr/share/nginx/html
 COPY docker/nginx.dashboard.conf /etc/nginx/conf.d/default.conf
 COPY docker/docker-entrypoint.dashboard.sh /docker-entrypoint.sh

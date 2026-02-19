@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@mesh-six/core": "workspace:*",
-    "@dapr/dapr": "^3.4.2",
+    "@dapr/dapr": "^3.6.1",
     "@ai-sdk/anthropic": "^1.2.0",
     "@ai-sdk/google": "^1.2.0",
     "@ai-sdk/openai": "^1.2.0",

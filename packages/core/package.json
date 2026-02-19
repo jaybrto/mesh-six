@@ -16,7 +16,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@dapr/dapr": "^3.4.2",
+    "@dapr/dapr": "^3.6.1",
     "@octokit/graphql": "^8.2.1",
     "@octokit/rest": "^22.0.0",
     "ai": "6",

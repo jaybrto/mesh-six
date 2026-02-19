@@ -18,7 +18,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -34,7 +34,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -50,7 +50,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -80,7 +80,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -130,7 +130,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -146,7 +146,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -162,7 +162,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -177,7 +177,7 @@
       "name": "@mesh-six/orchestrator",
       "version": "0.1.0",
       "dependencies": {
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "hono": "^4.7.4",
         "pg": "^8.13.1",
@@ -191,11 +191,12 @@
     },
     "apps/project-manager": {
       "name": "@mesh-six/project-manager",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
+        "@octokit/graphql": "^8.2.1",
         "@octokit/rest": "^21.0.0",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -212,7 +213,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -230,7 +231,7 @@
         "@ai-sdk/anthropic": "^1.2.0",
         "@ai-sdk/google": "^1.2.0",
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -246,7 +247,7 @@
       "version": "0.2.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -262,7 +263,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/openai": "^1.2.0",
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "ai": "^4.1.52",
         "hono": "^4.7.4",
@@ -277,7 +278,7 @@
       "name": "@mesh-six/webhook-receiver",
       "version": "0.1.0",
       "dependencies": {
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
         "hono": "^4.7.4",
         "zod": "^3.24.2",
@@ -291,7 +292,7 @@
       "name": "@mesh-six/core",
       "version": "0.5.0",
       "dependencies": {
-        "@dapr/dapr": "^3.4.2",
+        "@dapr/dapr": "^3.6.1",
         "@octokit/graphql": "^8.2.1",
         "@octokit/rest": "^22.0.0",
         "ai": "6",

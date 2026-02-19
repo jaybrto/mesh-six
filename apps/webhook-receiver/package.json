@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@mesh-six/core": "workspace:*",
-    "@dapr/dapr": "^3.4.2",
+    "@dapr/dapr": "^3.6.1",
     "hono": "^4.7.4",
     "zod": "^3.24.2"
   },

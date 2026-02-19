@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM oven/bun:1.2 AS builder
+FROM registry.bto.bar/jaybrto/bun:1.2 AS builder
 
 WORKDIR /app
 
@@ -20,7 +20,7 @@ COPY packages/core/ ./packages/core/
 COPY apps/${AGENT_APP}/ ./apps/${AGENT_APP}/
 
 # --- Runtime ---
-FROM oven/bun:1.2-slim
+FROM registry.bto.bar/jaybrto/bun:1.2-slim
 
 WORKDIR /app
 
