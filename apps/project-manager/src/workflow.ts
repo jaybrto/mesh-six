@@ -242,6 +242,28 @@ export interface MoveToFailedInput {
   reason: string;
 }
 
+export interface CompressContextInput {
+  sender: string;
+  receiver: string;
+  projectId: string;
+  taskSummary: string;
+  priority: number;
+  workflowState: Record<string, unknown>;
+  senderMemories: string[];
+  senderQuestions: string[];
+  constraints?: string[];
+  knownFailures?: string[];
+  conversationSnippet?: Array<{ role: string; content: string }>;
+}
+
+export interface CompressContextOutput {
+  compressedContext: string;
+  method: string;
+  compressionRatio: number;
+  durationMs: number;
+  fallback: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Activity type alias
 // ---------------------------------------------------------------------------
@@ -366,6 +388,13 @@ export let moveToFailedActivity: ActivityFn<MoveToFailedInput, void> =
     throw new Error("moveToFailedActivity not initialized");
   };
 
+export let compressContextActivity: ActivityFn<
+  CompressContextInput,
+  CompressContextOutput
+> = async () => {
+  throw new Error("compressContextActivity not initialized");
+};
+
 // ---------------------------------------------------------------------------
 // Main Workflow
 // ---------------------------------------------------------------------------
@@ -394,11 +423,39 @@ export const projectWorkflow: TWorkflow = async function* (
   // INTAKE phase (card is in Todo)
   // =====================================================================
 
-  // 1. Consult architect for guidance
+  // 1a. Compress context for architect
+  const architectContext: CompressContextOutput = yield ctx.callActivity(
+    compressContextActivity,
+    {
+      sender: "project-manager",
+      receiver: "architect-agent",
+      projectId: `${repoOwner}/${repoName}`,
+      taskSummary: `Decide technical approach for issue #${issueNumber}: ${issueTitle}`,
+      priority: 5,
+      workflowState: {
+        phase: "INTAKE",
+        issueNumber,
+        issueTitle,
+        repoOwner,
+        repoName,
+        projectItemId,
+      },
+      senderMemories: [],
+      senderQuestions: [
+        "What technical approach do you recommend?",
+        "What are the acceptance criteria?",
+        "Any integration concerns with existing services?",
+      ],
+      constraints: [],
+      knownFailures: [],
+    }
+  );
+
+  // 1b. Consult architect with compressed context
   const architectResult: ConsultArchitectOutput = yield ctx.callActivity(
     consultArchitectActivity,
     {
-      question: `New project request: issue #${issueNumber} "${issueTitle}" in ${repoOwner}/${repoName}. What technical approach do you recommend? Include acceptance criteria.`,
+      question: architectContext.compressedContext,
     }
   );
 
@@ -828,6 +885,7 @@ export interface WorkflowActivityImplementations {
   notifyTimeout: typeof notifyTimeoutActivity;
   reportSuccess: typeof reportSuccessActivity;
   moveToFailed: typeof moveToFailedActivity;
+  compressContext: typeof compressContextActivity;
 }
 
 // ---------------------------------------------------------------------------
@@ -856,6 +914,7 @@ export function createWorkflowRuntime(
   notifyTimeoutActivity = activityImpls.notifyTimeout;
   reportSuccessActivity = activityImpls.reportSuccess;
   moveToFailedActivity = activityImpls.moveToFailed;
+  compressContextActivity = activityImpls.compressContext;
 
   const runtime = new WorkflowRuntime({
     daprHost: DAPR_HOST,
@@ -884,6 +943,7 @@ export function createWorkflowRuntime(
   runtime.registerActivity(notifyTimeoutActivity);
   runtime.registerActivity(reportSuccessActivity);
   runtime.registerActivity(moveToFailedActivity);
+  runtime.registerActivity(compressContextActivity);
 
   return runtime;
 }

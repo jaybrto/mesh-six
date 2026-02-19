@@ -155,6 +155,7 @@ These decisions were made through extensive design discussion and should not be 
 | Homelab Monitor | `homelab-monitor` | Request-response | Pub/sub (receive tasks) | 5 |
 | Infra Manager | `infra-manager` | Request-response | Pub/sub (receive tasks) | 5 |
 | Cost Tracker | `cost-tracker` | Request-response | Scheduled + on-demand | 5 |
+| Context Service | `context-service` | Infrastructure | Service invocation (called by PM workflow) | 6 |
 
 ---
 
@@ -1756,6 +1757,11 @@ and **horizontal context compression** (Context Service, Milestone 6).
   payload + scoped Mem0 memories into the LLM call. This happens on the receiving agent after
   it receives the (already compressed) context from the sender.
 
+A third pattern handles **horizontal context transfer** between agents: the **Context Service** (Milestone 6). When the PM delegates to a specialist agent, it calls the Context Service to produce a compressed, budget-bounded briefing before invoking the target agent. This separates two distinct concerns:
+
+- `buildAgentContext()` — **vertical assembly**: combines system prompt + task JSON + Mem0 memories for a single agent's LLM call. Governs what one agent knows about its own task.
+- **Context Service** — **horizontal transfer**: compresses a sender's state payload before handing it to a receiver agent. Governs what crosses the agent-to-agent boundary. Uses deterministic rules first and falls back to Phi3.5 (Ollama) only when needed.
+
 #### Design Principle: Each Task is a Fresh AI Call
 
 Most agents (deployers, Architect, Researcher) receive a task, process it, and return a result.
@@ -1978,6 +1984,7 @@ mesh-six/
 │   ├── homelab-monitor/         # Milestone 5 - Cluster health + log analysis
 │   ├── infra-manager/           # Milestone 5 - DNS, firewall, proxy management
 │   ├── cost-tracker/            # Milestone 5 - LLM spend + resource tracking
+│   ├── context-service/         # Milestone 6 - Context compression proxy (rules + LLM fallback)
 │   └── event-logger/            # Standalone — pub/sub event tap
 ├── docs/
 │   └── CLAUDE_PROGRESS_UI.md    # Guide for building Claude progress UIs
@@ -2079,7 +2086,7 @@ Milestones are designed to be completed in order. Each builds on the infrastruct
 - Milestone 3: One session per agent (4 sessions), or 2 sessions grouping deployers and brain agents
 - Milestone 4: 2-3 sessions (state machine + GitHub integration + Gitea integration)
 - Milestone 5: One session per agent
-- Milestone 6: One session (Context Service + PM workflow integration)
+- Milestone 6: One session — context-service app + PM workflow integration + k8s manifests + unit tests
 
 ---
 

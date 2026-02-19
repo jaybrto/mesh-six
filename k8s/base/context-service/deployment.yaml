@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: context-service
+  namespace: mesh-six
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: context-service
+  template:
+    metadata:
+      labels:
+        app: context-service
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "context-service"
+        dapr.io/app-port: "3000"
+        dapr.io/log-level: "info"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+    spec:
+      containers:
+        - name: context-service
+          image: registry.bto.bar/jaybrto/mesh-six-context-service:latest
+          ports:
+            - containerPort: 3000
+              name: http
+          envFrom:
+            - secretRef:
+                name: mesh-six-secrets
+          env:
+            - name: AGENT_ID
+              value: "context-service"
+            - name: LITELLM_COMPRESSION_MODEL
+              value: "ollama-phi3.5"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"

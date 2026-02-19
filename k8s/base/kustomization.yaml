@@ -21,6 +21,7 @@ resources:
   - argocd-deployer/
   - kubectl-deployer/
   - claude-mqtt-bridge/
+  - context-service/
   - homelab-monitor/
   - infra-manager/
   - cost-tracker/
