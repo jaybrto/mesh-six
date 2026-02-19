@@ -26,6 +26,7 @@ spec:
       containers:
         - name: simple-agent
           image: registry.bto.bar/jaybrto/mesh-six-simple-agent:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
               name: http
@@ -37,14 +38,11 @@ spec:
             - name: APP_PORT
               value: "3000"
             - name: LITELLM_BASE_URL
-              value: "http://litellm.litellm:4000/v1"
+              value: "https://llm.bto.bar/v1"
             - name: LITELLM_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: litellm-secret
-                  key: api-key
-            - name: LLM_MODEL
-              value: "anthropic/claude-sonnet-4-20250514"
+              value: "sk-4Ht6To_Fz91z-PL--ZdEEw"
+            - name: LITELLM_CHAT_MODEL
+              value: "ollama-phi3.5"
           readinessProbe:
             httpGet:
               path: /healthz

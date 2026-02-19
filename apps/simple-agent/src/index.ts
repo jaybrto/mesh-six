@@ -25,7 +25,7 @@ const DAPR_HOST = process.env.DAPR_HOST || "localhost";
 const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
 const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || "http://litellm.litellm:4000/v1";
 const LITELLM_API_KEY = process.env.LITELLM_API_KEY || "sk-local";
-const LLM_MODEL = process.env.LLM_MODEL || "anthropic/claude-sonnet-4-20250514";
+const LLM_MODEL = process.env.LITELLM_CHAT_MODEL || process.env.LLM_MODEL || "ollama-phi3.5";
 const MEMORY_ENABLED = process.env.MEMORY_ENABLED !== "false";
 const DATABASE_URL = process.env.DATABASE_URL || process.env.PG_PRIMARY_URL || "";
 
