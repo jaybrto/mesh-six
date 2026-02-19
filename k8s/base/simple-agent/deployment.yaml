@@ -41,8 +41,8 @@ spec:
               value: "https://llm.bto.bar/v1"
             - name: LITELLM_API_KEY
               value: "sk-4Ht6To_Fz91z-PL--ZdEEw"
-            - name: LITELLM_CHAT_MODEL
-              value: "ollama-phi3.5"
+            - name: LLM_MODEL
+              value: "phi3.5"
           readinessProbe:
             httpGet:
               path: /healthz
