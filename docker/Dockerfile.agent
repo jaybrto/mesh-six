@@ -10,7 +10,9 @@ COPY packages/core/package.json ./packages/core/
 ARG AGENT_APP=simple-agent
 COPY apps/${AGENT_APP}/package.json ./apps/${AGENT_APP}/
 
-RUN bun install --frozen-lockfile
+# --frozen-lockfile fails when partial workspace (only core + agent) is copied;
+# bun.lock references all 17 workspace packages. Use bun install without it.
+RUN bun install
 
 # Copy source
 COPY tsconfig.json ./
