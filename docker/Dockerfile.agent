@@ -4,13 +4,12 @@ FROM oven/bun:1.2 AS builder
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json bunfig.toml ./
+# Copy workspace manifests first (layer cache: reinstall only when deps change)
+COPY package.json bunfig.toml bun.lock* ./
 COPY packages/core/package.json ./packages/core/
 ARG AGENT_APP=simple-agent
 COPY apps/${AGENT_APP}/package.json ./apps/${AGENT_APP}/
 
-# Install dependencies
 RUN bun install --frozen-lockfile
 
 # Copy source
@@ -18,23 +17,21 @@ COPY tsconfig.json ./
 COPY packages/core/ ./packages/core/
 COPY apps/${AGENT_APP}/ ./apps/${AGENT_APP}/
 
-# Build the agent
-RUN bun build apps/${AGENT_APP}/src/index.ts \
-    --target=bun \
-    --outdir=dist \
-    --minify
-
 # --- Runtime ---
 FROM oven/bun:1.2-slim
 
 WORKDIR /app
 
-# Copy built output
-COPY --from=builder /app/dist ./
+# Copy installed deps + source (run from source to avoid bundler issues with native packages)
+COPY --from=builder /app .
+
+# Bake the entrypoint path into the image at build time
+ARG AGENT_APP=simple-agent
+ENV AGENT_ENTRY="apps/${AGENT_APP}/src/index.ts"
 
 # Run as non-root
 USER bun
 
 EXPOSE 3000
 
-CMD ["bun", "run", "index.js"]
+CMD ["sh", "-c", "bun run ${AGENT_ENTRY}"]
