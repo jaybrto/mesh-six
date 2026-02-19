@@ -18,10 +18,11 @@
 8. [Milestone 4 — Project Manager Agent](#milestone-4--project-manager-agent)
 9. [Milestone 4.5 — GWA Integration](#milestone-45--gwa-integration-pm-agent--github-workflow-agents)
 10. [Milestone 5 — Infrastructure Agents](#milestone-5--infrastructure-agents)
-11. [Event Log — Standalone Module](#event-log--standalone-module)
-12. [Cross-Cutting Concerns](#cross-cutting-concerns)
-13. [Repository Structure](#repository-structure)
-14. [Deployment Strategy](#deployment-strategy)
+11. [Milestone 6 — Context Service](#milestone-6--context-service)
+12. [Event Log — Standalone Module](#event-log--standalone-module)
+13. [Cross-Cutting Concerns](#cross-cutting-concerns)
+14. [Repository Structure](#repository-structure)
+15. [Deployment Strategy](#deployment-strategy)
 
 ---
 
@@ -150,6 +151,7 @@ These decisions were made through extensive design discussion and should not be 
 | Project Manager | `project-manager` | Dapr Workflow (long-running) | Pub/sub + service invocation + workflow | 4 |
 | Claude MQTT Bridge | `claude-mqtt-bridge` | Infrastructure | MQTT publish (Claude hooks) | 4 |
 | Dashboard | `dashboard` | Web UI | MQTT WebSocket (read-only) | 4 |
+| Context Service | `context-service` | Infrastructure | Service invocation (called by PM workflow) | 6 |
 | Homelab Monitor | `homelab-monitor` | Request-response | Pub/sub (receive tasks) | 5 |
 | Infra Manager | `infra-manager` | Request-response | Pub/sub (receive tasks) | 5 |
 | Cost Tracker | `cost-tracker` | Request-response | Scheduled + on-demand | 5 |
@@ -722,7 +724,7 @@ CREATE INDEX idx_task_history_created
 - [ ] Deploy to k3s and verify end-to-end flow
 - [ ] Dapr traces visible in Grafana/Tempo
 - [ ] Dapr metrics scraped by Prometheus/Mimir
-- [ ] ArgoCD Application resource manages the deployment
+- [x] ArgoCD Application resource manages the deployment
 
 ### 1.8 — Milestone 1 Implementation Notes
 
@@ -1311,6 +1313,115 @@ Full architecture and acceptance criteria in `docs/PLAN_45_GWA.md`.
 
 ---
 
+## Milestone 6 — Context Service
+
+**Goal**: Build a hybrid deterministic + LLM-powered context compression proxy that sits between agents as a Dapr Workflow activity. When the PM workflow delegates to a specialist agent, the Context Service strips accumulated workflow state down to only what the receiving agent needs.
+
+**Deliverables**: Context Service microservice with two-stage compression pipeline (rule engine + Phi3.5 LLM fallback), output validation, PM workflow integration, core library compression types.
+
+**Value**: Receiving agents get clean, focused context instead of the PM's full accumulated state. Saves tokens on every agent delegation, prevents context pollution, and keeps specialist agents working with only the information they need.
+
+### 6.1 — Architecture
+
+Two-stage compression pipeline:
+
+1. **Deterministic Rule Engine** (Stage 1): Per-sender/per-receiver rules strip known-irrelevant fields from workflow state. Executes instantly, handles 60-80% of cases.
+2. **LLM Compression** (Stage 2): When rules can't compress below a configurable token ceiling, Phi3.5 via LiteLLM produces a structured compression (~5-7s). Uses the v3.2 prompt format validated through prototyping: METADATA/DOMAIN_CONTEXT/CONSTRAINTS/KNOWN_FAILURES/OPEN_QUESTIONS.
+3. **Output Validation**: Checks format compliance, detects hallucinations by diffing output vocabulary against input. Invalid LLM output falls back to deterministic output.
+
+Graceful degradation chain: deterministic -> LLM -> rule fallback -> raw passthrough. The workflow never blocks, even if the Context Service or Ollama is down.
+
+### 6.2 — Integration Pattern
+
+The Context Service is called as a **Dapr Workflow activity**, not inline by the PM agent:
+
+```
+PM Workflow (INTAKE phase)
+  │
+  ├── yield ctx.callActivity(compressContextActivity, {...})
+  │   └── Dapr service invocation → context-service/compress
+  │       ├── Rule engine strips irrelevant fields (instant)
+  │       ├── If under token ceiling → return
+  │       └── Else → Phi3.5 compression → validate → return
+  │
+  └── yield ctx.callActivity(consultArchitectActivity, {
+        question: compressedContext  // <-- compressed, not raw
+      })
+```
+
+This keeps the PM responsive, provides an independent failure domain, and gives free retry/audit via Dapr Workflow state.
+
+### 6.3 — Context Transfer Model
+
+The Context Service handles **horizontal context transfer** (agent → agent). It does not replace `buildAgentContext()`, which handles **vertical assembly** (system prompt + task payload + Mem0 memories) on the receiving agent.
+
+```
+Sender (PM)                    Context Service              Receiver (Architect)
+─────────────────────────────────────────────────────────────────────────────────
+Full workflow state ──────→  Rule engine strips      ──→  Receives compressed
++ memories                   + LLM compresses              context via Dapr
++ questions                  + validates output             invocation
+                                                           │
+                                                           └→ buildAgentContext()
+                                                              assembles system
+                                                              prompt + compressed
+                                                              context + local
+                                                              Mem0 memories
+```
+
+### 6.4 — Benchmark Data (from prototyping)
+
+| Metric | Value |
+|--------|-------|
+| Phi3.5 serial latency | ~5.7s (1000 prompt → 330 completion tokens) |
+| Throughput | ~64 tok/s on RX 6800 XT |
+| 2 concurrent requests | ~7.7s each, 8.1s wall |
+| 3 concurrent requests | ~9.9s each, 10.7s wall |
+| OLLAMA_NUM_PARALLEL | 4 (configured, 10.3GB of 16.4GB VRAM) |
+| Best compression ratio | 27-34% (v3.2 prompt) |
+| Temperature | 0.1 (higher caused hallucinations) |
+
+### 6.5 — Phase 1 Scope
+
+Phase 1 delivers the end-to-end pipeline:
+- Core compression types in `@mesh-six/core`
+- Context Service Hono microservice (`apps/context-service/`)
+- Deterministic rule engine with per-sender/per-receiver rules
+- LLM compression via Phi3.5 with v3.2 prompt
+- Output validation (format + hallucination detection)
+- `compressContextActivity` workflow activity in PM
+- PM INTAKE phase wired to compress → consult pattern
+- Kubernetes manifests and database migration
+- Tests for all components
+
+### 6.6 — Phase 2 Preview (Not in Phase 1 Scope)
+
+- Compression logging to `context_compression_log` table
+- Mem0 reflections about what compression strategies worked/failed
+- Adaptive rule engine that self-tunes based on success patterns
+- Prompt rotation when specific prompts produce garbled output
+- Per-agent compression profiles learned over time
+
+### 6.7 — Milestone 6 Acceptance Criteria
+
+- [ ] `@mesh-six/core` exports `CompressionRequest`, `CompressionResponse`, `CompressionRule` schemas
+- [ ] Context Service passes `/healthz` and `/readyz` checks
+- [ ] Deterministic compression handles pm-to-architect and pm-to-researcher pairs
+- [ ] LLM fallback activates when deterministic output exceeds token ceiling
+- [ ] Output validation catches missing sections and hallucinated terms
+- [ ] LLM validation failure falls back to deterministic output (no 500s)
+- [ ] Context Service unreachable → PM workflow proceeds with fallback context
+- [ ] `compressContextActivity` registered in PM workflow runtime
+- [ ] PM INTAKE phase uses compress → consult pattern for architect delegation
+- [ ] Kubernetes manifests with Dapr annotations deploy cleanly
+- [ ] `migrations/004_context_compression_log.sql` applies without errors
+- [ ] All unit tests pass (rule engine, validation, formatting)
+- [ ] Integration tests pass (service endpoint, workflow activity)
+
+Full implementation plan: `docs/plans/2026-02-19-context-service.md`
+
+---
+
 ## Event Log — Standalone Module
 
 > Not tied to a specific milestone. Deploy when needed — the design is ready to pick up
@@ -1633,8 +1744,17 @@ dispatched → result.
 
 ### Context Window Management
 
-Mesh Six agents maintain small, predictable context windows through two core patterns:
-**stateless task dispatch** (most agents) and **reflect-before-reset** (stateful agents like PM).
+Mesh Six agents maintain small, predictable context windows through three core patterns:
+**stateless task dispatch** (most agents), **reflect-before-reset** (stateful agents like PM),
+and **horizontal context compression** (Context Service, Milestone 6).
+
+**Horizontal vs. Vertical Context:**
+- **Horizontal transfer** (agent → agent): The Context Service compresses accumulated sender state
+  before it crosses an agent boundary. This strips irrelevant workflow metadata and focuses the
+  payload on what the receiving agent actually needs. See [Milestone 6](#milestone-6--context-service).
+- **Vertical assembly** (within an agent): `buildAgentContext()` assembles system prompt + task
+  payload + scoped Mem0 memories into the LLM call. This happens on the receiving agent after
+  it receives the (already compressed) context from the sender.
 
 #### Design Principle: Each Task is a Fresh AI Call
 
@@ -1833,6 +1953,7 @@ mesh-six/
 │       │   ├── registry.ts      # Agent registry (Dapr state)
 │       │   ├── scoring.ts       # Agent scoring logic
 │       │   ├── context.ts       # Context builder + reflect-before-reset
+│       │   ├── compression.ts   # Compression request/response types (M6)
 │       │   ├── events.ts        # Immutable event log (append-only)
 │       │   ├── ai.ts            # Traced LLM wrappers (generateText + event logging)
 │       │   ├── memory.ts        # Mem0 client wrapper
@@ -1853,6 +1974,7 @@ mesh-six/
 │   ├── project-manager/         # Milestone 4 - Project lifecycle + Dapr Workflow
 │   ├── claude-mqtt-bridge/      # Milestone 4 - Claude Code hooks → MQTT
 │   ├── dashboard/               # Milestone 4 - React + Vite real-time monitoring UI
+│   ├── context-service/         # Milestone 6 - Context compression proxy
 │   ├── homelab-monitor/         # Milestone 5 - Cluster health + log analysis
 │   ├── infra-manager/           # Milestone 5 - DNS, firewall, proxy management
 │   ├── cost-tracker/            # Milestone 5 - LLM spend + resource tracking
@@ -1880,7 +2002,8 @@ mesh-six/
 ├── migrations/
 │   ├── 001_agent_task_history.sql
 │   ├── 002_repo_registry.sql
-│   └── 003_mesh_six_events.sql
+│   ├── 003_mesh_six_events.sql
+│   └── 004_context_compression_log.sql
 ├── docker/
 │   └── Dockerfile.agent         # Shared Dockerfile for Bun agents
 ├── .github/
@@ -1956,9 +2079,10 @@ Milestones are designed to be completed in order. Each builds on the infrastruct
 - Milestone 3: One session per agent (4 sessions), or 2 sessions grouping deployers and brain agents
 - Milestone 4: 2-3 sessions (state machine + GitHub integration + Gitea integration)
 - Milestone 5: One session per agent
+- Milestone 6: One session (Context Service + PM workflow integration)
 
 ---
 
 *Document created: February 10, 2026*
 *Architecture designed through iterative discussion between Jay and Claude*
-*Last updated: v1.3 — corrected Mem0 architecture, added new M3 agents, added event log module*
+*Last updated: v1.4 — added Milestone 6 (Context Service), updated context window management model*
