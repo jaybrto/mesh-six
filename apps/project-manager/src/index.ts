@@ -1645,7 +1645,17 @@ async function start(): Promise<void> {
 
     // Create and start workflow runtime
     workflowRuntime = createWorkflowRuntime(activityImplementations);
-    await workflowRuntime.start();
+    // Wrap start() to catch both sync and async gRPC stream errors
+    // (durabletask-js can fail asynchronously on gRPC stream after start() resolves)
+    await workflowRuntime.start().catch((err: Error) => {
+      throw err; // rethrow — caught by outer catch block
+    });
+    // Attach error handler to suppress async gRPC stream errors from crashing the process
+    (workflowRuntime as any).on?.("error", (err: Error) => {
+      console.warn(`[${AGENT_ID}] Workflow runtime stream error (continuing without workflow):`, err.message);
+      workflowRuntime = null;
+      workflowClient = null;
+    });
     console.log(`[${AGENT_ID}] Workflow runtime started`);
 
     // Create workflow client
@@ -1795,6 +1805,22 @@ async function shutdown(): Promise<void> {
 
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
+
+// Catch async gRPC stream errors from @dapr/durabletask-js WorkflowRuntime.
+// These occur when the Dapr runtime version doesn't fully support the Workflow gRPC API
+// used by the SDK. Rather than crashing, we degrade gracefully to non-workflow mode.
+process.on("unhandledRejection", (reason) => {
+  const msg = String(reason);
+  if (msg.includes("UNIMPLEMENTED") || msg.includes("grpc") || msg.includes("durabletask")) {
+    console.warn(`[${AGENT_ID}] Workflow gRPC error (Dapr runtime/SDK version mismatch) — continuing in non-workflow mode:`, msg.slice(0, 200));
+    workflowRuntime = null;
+    workflowClient = null;
+  } else {
+    // Re-throw non-workflow unhandled rejections
+    console.error(`[${AGENT_ID}] Unhandled rejection:`, reason);
+    process.exit(1);
+  }
+});
 
 start().catch((error) => {
   console.error(`[${AGENT_ID}] Failed to start:`, error);
