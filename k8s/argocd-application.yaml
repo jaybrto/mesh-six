@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://git.bto.bar/jay/mesh-six.git
+    repoURL: https://github.com/jaybrto/mesh-six.git
     targetRevision: main
     path: k8s/overlays/prod
   destination:
