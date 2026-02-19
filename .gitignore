@@ -155,3 +155,6 @@ docs/PLAN_HANDOFF.md
 
 # History
 .history/
+
+# Git worktrees
+.worktrees/
