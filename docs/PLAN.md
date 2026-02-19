@@ -18,10 +18,11 @@
 8. [Milestone 4 — Project Manager Agent](#milestone-4--project-manager-agent)
 9. [Milestone 4.5 — GWA Integration](#milestone-45--gwa-integration-pm-agent--github-workflow-agents)
 10. [Milestone 5 — Infrastructure Agents](#milestone-5--infrastructure-agents)
-11. [Event Log — Standalone Module](#event-log--standalone-module)
-12. [Cross-Cutting Concerns](#cross-cutting-concerns)
-13. [Repository Structure](#repository-structure)
-14. [Deployment Strategy](#deployment-strategy)
+11. [Milestone 6 — Context Service](#milestone-6--context-service)
+12. [Event Log — Standalone Module](#event-log--standalone-module)
+13. [Cross-Cutting Concerns](#cross-cutting-concerns)
+14. [Repository Structure](#repository-structure)
+15. [Deployment Strategy](#deployment-strategy)
 
 ---
 
@@ -153,6 +154,7 @@ These decisions were made through extensive design discussion and should not be 
 | Homelab Monitor | `homelab-monitor` | Request-response | Pub/sub (receive tasks) | 5 |
 | Infra Manager | `infra-manager` | Request-response | Pub/sub (receive tasks) | 5 |
 | Cost Tracker | `cost-tracker` | Request-response | Scheduled + on-demand | 5 |
+| Context Service | `context-service` | Infrastructure | Service invocation (called by PM workflow) | 6 |
 
 ---
 
@@ -1311,6 +1313,117 @@ Full architecture and acceptance criteria in `docs/PLAN_45_GWA.md`.
 
 ---
 
+## Milestone 6 — Context Service
+
+**Goal**: Build a context compression proxy that enables inter-agent delegation without context blowout. When the PM hands off a task to a specialist agent, it calls the Context Service to produce a compressed, structured briefing — instead of forwarding the full conversation history or raw Dapr state.
+
+**Value**: Agents can delegate to each other across state boundaries with predictable, budget-bounded context. The PM never needs to guess how much to include; the Context Service handles compression with deterministic rules and an LLM fallback.
+
+### 6.1 — Design Principles
+
+- **Deterministic first, LLM fallback**: A rules-based compressor handles well-structured inputs (JSON state, short payloads). LLM compression (Phi3.5 via Ollama) is only invoked when the payload exceeds a threshold or contains free-form text that rules cannot safely truncate.
+- **Output validation**: Every compressed output is validated against a Zod schema before returning. If validation fails, the service returns an error — never silently corrupt data.
+- **Stateless**: The Context Service holds no state. It receives a payload, compresses it, returns the result. All durability lives in Dapr state (PM side).
+- **Single responsibility**: Context compression only. No task routing, no memory writes, no LLM orchestration.
+
+### 6.2 — API
+
+The Context Service exposes a single Dapr service invocation endpoint:
+
+```
+POST /compress
+Content-Type: application/json
+
+{
+  "sourceAgentId": "project-manager",
+  "targetAgentId": "architect-agent",
+  "taskId": "uuid",
+  "payload": { ... },          // Arbitrary JSON — task state, conversation excerpt, etc.
+  "maxTokens": 1500,           // Target ceiling for compressed output
+  "compressionHint": "handoff" // "handoff" | "summary" | "debug"
+}
+```
+
+Response:
+
+```json
+{
+  "compressed": { ... },       // Compressed payload — same schema as input, keys pruned/summarized
+  "method": "rules" | "llm",  // Which compressor was used
+  "inputTokensEstimate": 4200,
+  "outputTokensEstimate": 980,
+  "validationPassed": true
+}
+```
+
+### 6.3 — Compression Pipeline
+
+```
+Input payload
+  │
+  ├── Estimate token count (rough: chars / 4)
+  │
+  ├── If estimate ≤ maxTokens → return as-is (no-op fast path)
+  │
+  ├── Rules-based compressor:
+  │   ├── Drop fields matching known noise patterns (logs[], rawOutput, etc.)
+  │   ├── Truncate string fields > 500 chars to first 200 + "…[truncated]"
+  │   ├── Collapse arrays > 5 items to first 3 + summary count
+  │   └── Re-estimate; if ≤ maxTokens → done
+  │
+  └── LLM compressor (Phi3.5 via Ollama):
+      ├── Prompt: "Compress this JSON for agent handoff. Preserve all decision-relevant
+      │           fields. Target: {maxTokens} tokens. Return valid JSON."
+      ├── generateObject() with target schema
+      └── Validate output → return or error
+```
+
+### 6.4 — PM Workflow Integration
+
+The PM calls the Context Service before invoking specialist agents:
+
+```typescript
+// Inside PM workflow activity: consultArchitect()
+
+// Before (raw state forwarded — unpredictable size):
+// const result = await dapr.invoke("architect-agent", "consult", fullTaskState);
+
+// After (compressed handoff):
+const briefing = await dapr.invoke("context-service", "compress", {
+  sourceAgentId: "project-manager",
+  targetAgentId: "architect-agent",
+  taskId: task.id,
+  payload: fullTaskState,
+  maxTokens: 1500,
+  compressionHint: "handoff",
+});
+const result = await dapr.invoke("architect-agent", "consult", briefing.compressed);
+```
+
+### 6.5 — Phase 2 Preview (Not in Scope for M6)
+
+- **Compression logging**: Emit `context.compressed` events to `mesh_six_events` for monitoring compression ratios over time.
+- **Adaptive behavior**: If LLM compression is invoked more than 20% of the time for a given `sourceAgentId`, emit a `context.budget_pressure` alert so the PM's state schema can be refined.
+- **Schema registry**: Store target-agent schemas so the compressor knows exactly which fields the receiving agent needs, enabling surgical field selection instead of generic truncation.
+
+### 6.6 — Milestone 6 Acceptance Criteria
+
+- [ ] `apps/context-service/` created following the standard agent template (Hono + Dapr sidecar)
+- [ ] `POST /compress` endpoint implemented with rules-based compressor
+- [ ] Rules-based compressor handles: field dropping, string truncation, array collapsing
+- [ ] LLM fallback (Phi3.5 via Ollama) invoked when rules compressor output exceeds `maxTokens`
+- [ ] Output validated against Zod schema before returning; validation failure returns 4xx
+- [ ] No-op fast path when input is already within budget (avoids unnecessary LLM calls)
+- [ ] PM workflow `consultArchitect()` activity updated to call Context Service before handoff
+- [ ] PM workflow `requestResearch()` activity updated to call Context Service before handoff
+- [ ] `context-service` self-registers in AgentRegistry on startup
+- [ ] Kubernetes manifests: Deployment + Service with Dapr sidecar annotations
+- [ ] CI matrix updated to include `context-service` image build
+- [ ] Unit tests: rules compressor logic, no-op fast path, validation failure path
+- [ ] Deploy to k3s and verify PM → Context Service → Architect invocation chain end-to-end
+
+---
+
 ## Event Log — Standalone Module
 
 > Not tied to a specific milestone. Deploy when needed — the design is ready to pick up
@@ -1636,6 +1749,11 @@ dispatched → result.
 Mesh Six agents maintain small, predictable context windows through two core patterns:
 **stateless task dispatch** (most agents) and **reflect-before-reset** (stateful agents like PM).
 
+A third pattern handles **horizontal context transfer** between agents: the **Context Service** (Milestone 6). When the PM delegates to a specialist agent, it calls the Context Service to produce a compressed, budget-bounded briefing before invoking the target agent. This separates two distinct concerns:
+
+- `buildAgentContext()` — **vertical assembly**: combines system prompt + task JSON + Mem0 memories for a single agent's LLM call. Governs what one agent knows about its own task.
+- **Context Service** — **horizontal transfer**: compresses a sender's state payload before handing it to a receiver agent. Governs what crosses the agent-to-agent boundary. Uses deterministic rules first and falls back to Phi3.5 (Ollama) only when needed.
+
 #### Design Principle: Each Task is a Fresh AI Call
 
 Most agents (deployers, Architect, Researcher) receive a task, process it, and return a result.
@@ -1856,6 +1974,7 @@ mesh-six/
 │   ├── homelab-monitor/         # Milestone 5 - Cluster health + log analysis
 │   ├── infra-manager/           # Milestone 5 - DNS, firewall, proxy management
 │   ├── cost-tracker/            # Milestone 5 - LLM spend + resource tracking
+│   ├── context-service/         # Milestone 6 - Context compression proxy (rules + LLM fallback)
 │   └── event-logger/            # Standalone — pub/sub event tap
 ├── docs/
 │   └── CLAUDE_PROGRESS_UI.md    # Guide for building Claude progress UIs
@@ -1956,6 +2075,7 @@ Milestones are designed to be completed in order. Each builds on the infrastruct
 - Milestone 3: One session per agent (4 sessions), or 2 sessions grouping deployers and brain agents
 - Milestone 4: 2-3 sessions (state machine + GitHub integration + Gitea integration)
 - Milestone 5: One session per agent
+- Milestone 6: One session — context-service app + PM workflow integration + k8s manifests + unit tests
 
 ---
 

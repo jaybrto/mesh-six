@@ -75,6 +75,23 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/context-service": {
+      "name": "@mesh-six/context-service",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ai-sdk/openai": "^1.0.0",
+        "@mesh-six/core": "workspace:*",
+        "ai": "^4.0.0",
+        "hono": "^4.7.4",
+        "pg": "^8.13.0",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.2.4",
+        "@types/pg": "^8.11.0",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/cost-tracker": {
       "name": "@mesh-six/cost-tracker",
       "version": "0.1.0",
@@ -246,10 +263,8 @@
       "name": "@mesh-six/simple-agent",
       "version": "0.2.0",
       "dependencies": {
-        "@ai-sdk/openai": "^1.2.0",
         "@dapr/dapr": "^3.6.1",
         "@mesh-six/core": "workspace:*",
-        "ai": "^4.1.52",
         "hono": "^4.7.4",
         "zod": "^3.24.2",
       },
@@ -495,6 +510,8 @@
     "@mesh-six/argocd-deployer": ["@mesh-six/argocd-deployer@workspace:apps/argocd-deployer"],
 
     "@mesh-six/claude-mqtt-bridge": ["@mesh-six/claude-mqtt-bridge@workspace:apps/claude-mqtt-bridge"],
+
+    "@mesh-six/context-service": ["@mesh-six/context-service@workspace:apps/context-service"],
 
     "@mesh-six/core": ["@mesh-six/core@workspace:packages/core"],
 

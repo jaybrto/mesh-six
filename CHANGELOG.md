@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-19: Context Service
+
+#### New Service: Context Compression Proxy
+- **@mesh-six/context-service@0.1.0**: Hybrid deterministic + LLM context compression proxy
+  - Two-stage compression pipeline: deterministic rule engine (instant, no LLM cost) + Phi3.5 LLM fallback via LiteLLM
+  - Output validation with hallucination detection and format compliance checks
+  - Graceful degradation chain: deterministic → LLM → rule fallback → raw passthrough (never fails)
+  - `POST /compress` endpoint for Dapr service invocation by other agents
+
+#### Core Library
+- **@mesh-six/core**: Added compression Zod schemas
+  - `CompressionRequest` — payload schema for `/compress` requests
+  - `CompressionResponse` — typed response including compressed output and stage metadata
+  - `CompressionRule` — schema for individual deterministic compression rules
+
+#### PM Workflow Enhancement
+- **@mesh-six/project-manager**: Added `compressContextActivity` to Dapr Workflow
+  - Compresses context before architect consultation in the INTAKE phase
+  - Reduces token usage on architect LLM calls by pre-processing context through context-service
+
 ### Added - Milestone 4.5: GWA Integration (PM Agent ↔ GitHub Workflow Agents)
 
 #### New Service: Webhook Receiver

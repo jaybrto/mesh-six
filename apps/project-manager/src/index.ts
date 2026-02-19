@@ -1641,6 +1641,42 @@ async function start(): Promise<void> {
         }
         await updateStatus(input.workflowId, "failed");
       },
+
+      compressContext: async (_ctx, input) => {
+        try {
+          const response = await daprClient.invoker.invoke(
+            "context-service",
+            "compress",
+            HttpMethod.POST,
+            input
+          );
+          const result = typeof response === "string" ? JSON.parse(response) : response;
+          return {
+            compressedContext: result.compressedContext ?? "",
+            method: result.method ?? "passthrough",
+            compressionRatio: result.stats?.compressionRatio ?? 1,
+            durationMs: result.stats?.durationMs ?? 0,
+            fallback: false,
+          };
+        } catch (error) {
+          console.warn(`[${AGENT_ID}] Context compression failed, passing raw context: ${error}`);
+          const fallbackContext = [
+            `Task: ${input.taskSummary}`,
+            `Priority: ${input.priority}`,
+            `Project: ${input.projectId}`,
+            ...(input.senderQuestions.length > 0
+              ? ["", "Questions:", ...input.senderQuestions.map((q: string, i: number) => `${i + 1}. ${q}`)]
+              : []),
+          ].join("\n");
+          return {
+            compressedContext: fallbackContext,
+            method: "passthrough",
+            compressionRatio: 1,
+            durationMs: 0,
+            fallback: true,
+          };
+        }
+      },
     };
 
     // Create and start workflow runtime

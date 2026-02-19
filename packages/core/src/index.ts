@@ -84,3 +84,13 @@ export {
   checkAuthEnvironment,
   ClaudeAuthError,
 } from "./claude.js";
+
+// Context compression
+export {
+  CompressionRequestSchema,
+  CompressionResponseSchema,
+  CompressionRuleSchema,
+  type CompressionRequest,
+  type CompressionResponse,
+  type CompressionRule,
+} from "./compression.js";
