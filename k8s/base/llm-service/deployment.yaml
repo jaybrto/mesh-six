@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-service
+  namespace: mesh-six
+  labels:
+    app: llm-service
+    app.kubernetes.io/part-of: mesh-six
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-service
+  template:
+    metadata:
+      labels:
+        app: llm-service
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "llm-service"
+        dapr.io/app-port: "3000"
+        dapr.io/log-level: "info"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+        # Enable actor support — tells Dapr to use placement service
+        dapr.io/config: "llm-service-config"
+    spec:
+      containers:
+        - name: llm-service
+          image: registry.bto.bar/jaybrto/mesh-six-llm-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: AGENT_ID
+              value: "llm-service"
+            - name: APP_PORT
+              value: "3000"
+            - name: MAX_ACTORS
+              value: "3"
+            - name: DEFAULT_MODEL
+              value: "claude-sonnet-4-20250514"
+            - name: ALLOWED_MODELS
+              value: "claude-sonnet-4-20250514,claude-opus-4-20250514,claude-haiku-4-5-20251001"
+            # MinIO credentials — from external secrets
+            - name: MINIO_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: MINIO_ENDPOINT
+                  optional: true
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: MINIO_ACCESS_KEY
+                  optional: true
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: MINIO_SECRET_KEY
+                  optional: true
+            - name: MINIO_BUCKET
+              value: "llm-service"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"

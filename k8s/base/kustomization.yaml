@@ -28,6 +28,7 @@ resources:
   - dashboard/
   - event-logger/
   - webhook-receiver/
+  - llm-service/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

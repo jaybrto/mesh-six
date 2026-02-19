@@ -94,3 +94,25 @@ export {
   type CompressionResponse,
   type CompressionRule,
 } from "./compression.js";
+
+// LLM Service
+export {
+  DAPR_LLM_SERVICE_APP_ID,
+  LLM_EVENTS_TOPIC,
+  LLM_ACTOR_TYPE,
+  LLM_CONFIG_KEYS,
+  ChatMessageSchema,
+  ChatCompletionRequestSchema,
+  ChatCompletionResponseSchema,
+  ActorStatusSchema,
+  ActorInfoSchema,
+  LLMServiceStatusSchema,
+  CLIHookEventSchema,
+  type ChatMessage,
+  type ChatCompletionRequest,
+  type ChatCompletionResponse,
+  type ActorStatus,
+  type ActorInfo,
+  type LLMServiceStatus,
+  type CLIHookEvent,
+} from "./llm-service.js";
