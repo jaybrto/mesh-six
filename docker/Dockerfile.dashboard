@@ -6,7 +6,10 @@ COPY package.json bunfig.toml bun.lock* ./
 COPY packages/core/package.json packages/core/
 COPY apps/dashboard/package.json apps/dashboard/
 
-RUN bun install --frozen-lockfile
+# --frozen-lockfile would fail because bun.lock references all 17 workspace packages
+# but only packages/core and apps/dashboard are copied here. Using bun install
+# without the flag lets bun resolve using the lockfile without erroring on missing workspaces.
+RUN bun install
 
 # Now copy source (cache miss only when source changes)
 COPY packages/core/ packages/core/
