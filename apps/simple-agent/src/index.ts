@@ -1,13 +1,11 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { createOpenAI } from "@ai-sdk/openai";
 import { Pool } from "pg";
 import {
   AgentRegistry,
   AgentMemory,
   createAgentMemoryFromEnv,
   EventLog,
-  tracedGenerateText,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -23,17 +21,31 @@ const AGENT_NAME = process.env.AGENT_NAME || "Simple Agent";
 const APP_PORT = Number(process.env.APP_PORT) || 3000;
 const DAPR_HOST = process.env.DAPR_HOST || "localhost";
 const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
-const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || "http://litellm.litellm:4000/v1";
-const LITELLM_API_KEY = process.env.LITELLM_API_KEY || "sk-local";
-const LLM_MODEL = process.env.LLM_MODEL || "phi3.5";
+const OLLAMA_URL = process.env.OLLAMA_URL || "http://bto-mini.bto.bar:11434";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi3.5";
 const MEMORY_ENABLED = process.env.MEMORY_ENABLED !== "false";
 const DATABASE_URL = process.env.DATABASE_URL || process.env.PG_PRIMARY_URL || "";
 
-// --- LLM Provider (LiteLLM OpenAI-compatible with Ollama) ---
-const llm = createOpenAI({
-  baseURL: LITELLM_BASE_URL,
-  apiKey: LITELLM_API_KEY,
-});
+// --- Native Ollama HTTP Client ---
+async function generateWithOllama(prompt: string, systemPrompt: string): Promise<string> {
+  const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: OLLAMA_MODEL,
+      prompt: `${systemPrompt}\n\nUser: ${prompt}\n\nAssistant:`,
+      stream: false,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+  }
+
+  const data = (await response.json()) as { response: string };
+  return data.response.trim();
+}
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
@@ -174,12 +186,14 @@ async function handleTask(task: TaskRequest): Promise<TaskResult> {
     }
   }
 
-  // Generate response
-  const traceId = crypto.randomUUID();
-  const { text } = await tracedGenerateText(
-    { model: llm(LLM_MODEL), system: systemPrompt, prompt: query },
-    eventLog ? { eventLog, traceId, agentId: AGENT_ID, taskId: task.id } : null
-  );
+  // Generate response using native Ollama API
+  let text: string;
+  try {
+    text = await generateWithOllama(query, systemPrompt);
+  } catch (error) {
+    throw new Error(`LLM generation failed: ${error}`);
+  }
+  console.log(`[${AGENT_ID}] Generated response`);
 
   // Store conversation in memory
   if (memory) {
