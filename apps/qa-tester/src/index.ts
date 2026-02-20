@@ -1,7 +1,5 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { generateObject, tool } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { Pool } from "pg";
 import {
@@ -9,7 +7,9 @@ import {
   AgentMemory,
   createAgentMemoryFromEnv,
   EventLog,
-  tracedGenerateText,
+  tracedChatCompletion,
+  chatCompletionWithSchema,
+  tool,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -34,10 +34,6 @@ const LITELLM_API_KEY = process.env.LITELLM_API_KEY || "sk-local";
 const LLM_MODEL = process.env.LLM_MODEL || "anthropic/claude-sonnet-4-20250514";
 
 // --- LLM Provider ---
-const llm = createOpenAI({
-  baseURL: LITELLM_BASE_URL,
-  apiKey: LITELLM_API_KEY,
-});
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
@@ -494,19 +490,17 @@ async function handleQARequest(request: QARequest): Promise<TestPlan | TestCode 
 
   switch (request.action) {
     case "create-test-plan": {
-      const { text: analysis } = await tracedGenerateText(
+      const { text: analysis } = await tracedChatCompletion(
         {
-          model: llm(LLM_MODEL),
+          model: LLM_MODEL,
           system: enhancedPrompt,
           prompt: `Create a comprehensive test plan for this project.${contextPrompt}`,
-          tools,
-          maxSteps: 3,
         },
         traceCtx
       );
 
-      const { object } = await generateObject({
-        model: llm(LLM_MODEL),
+      const { object } = await chatCompletionWithSchema({
+        model: LLM_MODEL,
         schema: TestPlanSchema,
         system: enhancedPrompt,
         prompt: `Based on this analysis, create a structured test plan:\n\n${analysis}`,
@@ -517,19 +511,17 @@ async function handleQARequest(request: QARequest): Promise<TestPlan | TestCode 
 
     case "generate-tests": {
       const framework = request.preferences?.testFramework || "playwright";
-      const { text: analysis } = await tracedGenerateText(
+      const { text: analysis } = await tracedChatCompletion(
         {
-          model: llm(LLM_MODEL),
+          model: LLM_MODEL,
           system: enhancedPrompt,
           prompt: `Generate ${framework} tests for this project.${contextPrompt}\n\nPreferred language: ${request.preferences?.language || "typescript"}`,
-          tools,
-          maxSteps: 3,
         },
         traceCtx
       );
 
-      const { object } = await generateObject({
-        model: llm(LLM_MODEL),
+      const { object } = await chatCompletionWithSchema({
+        model: LLM_MODEL,
         schema: TestCodeSchema,
         system: enhancedPrompt,
         prompt: `Based on this analysis, generate structured test code:\n\n${analysis}`,
@@ -539,19 +531,17 @@ async function handleQARequest(request: QARequest): Promise<TestPlan | TestCode 
     }
 
     case "analyze-results": {
-      const { text: analysis } = await tracedGenerateText(
+      const { text: analysis } = await tracedChatCompletion(
         {
-          model: llm(LLM_MODEL),
+          model: LLM_MODEL,
           system: enhancedPrompt,
           prompt: `Analyze these test results and provide insights.${contextPrompt}`,
-          tools,
-          maxSteps: 3,
         },
         traceCtx
       );
 
-      const { object } = await generateObject({
-        model: llm(LLM_MODEL),
+      const { object } = await chatCompletionWithSchema({
+        model: LLM_MODEL,
         schema: TestAnalysisSchema,
         system: enhancedPrompt,
         prompt: `Create a structured analysis:\n\n${analysis}`,
@@ -561,13 +551,11 @@ async function handleQARequest(request: QARequest): Promise<TestPlan | TestCode 
     }
 
     default: {
-      const { text } = await tracedGenerateText(
+      const { text } = await tracedChatCompletion(
         {
-          model: llm(LLM_MODEL),
+          model: LLM_MODEL,
           system: enhancedPrompt,
           prompt: `${request.action}: ${contextPrompt}`,
-          tools,
-          maxSteps: 3,
         },
         traceCtx
       );
