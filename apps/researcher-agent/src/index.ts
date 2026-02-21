@@ -1,9 +1,5 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { generateObject, tool } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { z } from "zod";
 import { Pool } from "pg";
 import {
@@ -11,7 +7,9 @@ import {
   AgentMemory,
   createAgentMemoryFromEnv,
   EventLog,
-  tracedGenerateText,
+  tracedChatCompletion,
+  chatCompletionWithSchema,
+  tool,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -41,55 +39,25 @@ const DEFAULT_OLLAMA_MODEL = process.env.OLLAMA_MODEL || "phi4-mini";
 const DEFAULT_CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-20250514";
 const DEFAULT_GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 
-// --- LLM Providers ---
-// LiteLLM for Ollama and other OpenAI-compatible endpoints
-const litellm = createOpenAI({
-  baseURL: LITELLM_BASE_URL,
-  apiKey: LITELLM_API_KEY,
-});
-
-// Direct Anthropic provider (when API key is available)
-const anthropic = ANTHROPIC_API_KEY
-  ? createAnthropic({ apiKey: ANTHROPIC_API_KEY })
-  : null;
-
-// Google Gemini provider (when API key is available)
-const google = GOOGLE_API_KEY
-  ? createGoogleGenerativeAI({ apiKey: GOOGLE_API_KEY })
-  : null;
-
 // --- Provider Selection ---
 type ProviderType = "ollama" | "claude" | "gemini" | "auto";
 
-function getModel(provider: ProviderType, taskComplexity: "low" | "medium" | "high" = "medium") {
+function getModel(provider: ProviderType, taskComplexity: "low" | "medium" | "high" = "medium"): string {
   switch (provider) {
     case "claude":
-      if (anthropic) {
-        return anthropic(DEFAULT_CLAUDE_MODEL);
-      }
-      // Fall back to LiteLLM with Anthropic routing
-      return litellm(`anthropic/${DEFAULT_CLAUDE_MODEL}`);
-
+      return `anthropic/${DEFAULT_CLAUDE_MODEL}`;
     case "gemini":
-      if (google) {
-        return google(DEFAULT_GEMINI_MODEL);
-      }
-      // Fall back to LiteLLM with Google routing
-      return litellm(`google/${DEFAULT_GEMINI_MODEL}`);
-
+      return `gemini/${DEFAULT_GEMINI_MODEL}`;
     case "ollama":
-      return litellm(`ollama/${DEFAULT_OLLAMA_MODEL}`);
-
+      return `ollama/${DEFAULT_OLLAMA_MODEL}`;
     case "auto":
     default:
-      // Auto-select based on task complexity
-      if (taskComplexity === "high" && anthropic) {
-        return anthropic(DEFAULT_CLAUDE_MODEL);
-      } else if (taskComplexity === "medium" && google) {
-        return google(DEFAULT_GEMINI_MODEL);
+      if (taskComplexity === "high" && ANTHROPIC_API_KEY) {
+        return `anthropic/${DEFAULT_CLAUDE_MODEL}`;
+      } else if (taskComplexity === "medium" && GOOGLE_API_KEY) {
+        return `gemini/${DEFAULT_GEMINI_MODEL}`;
       }
-      // Default to Ollama for quick/private tasks
-      return litellm(`ollama/${DEFAULT_OLLAMA_MODEL}`);
+      return `ollama/${DEFAULT_OLLAMA_MODEL}`;
   }
 }
 
@@ -557,21 +525,19 @@ async function handleResearch(request: ResearchRequest): Promise<ResearchResult 
 
   if (requireStructured) {
     // Step 1: Gather information with tools
-    const { text: researchAnalysis } = await tracedGenerateText(
+    const { text: researchAnalysis } = await tracedChatCompletion(
       {
         model,
         system: enhancedPrompt,
         prompt: `Research this topic thoroughly using available tools. Depth: ${depth}
 
 Topic: ${query}`,
-        tools,
-        maxSteps: depth === "comprehensive" ? 8 : depth === "quick" ? 3 : 5,
       },
       traceCtx
     );
 
     // Step 2: Generate structured output
-    const { object } = await generateObject({
+    const { object } = await chatCompletionWithSchema({
       model,
       schema: ResearchResultSchema,
       system: enhancedPrompt,
@@ -596,13 +562,11 @@ Research Type: ${type}`,
     result = object;
   } else {
     // Generate free-form research with tools
-    const { text } = await tracedGenerateText(
+    const { text } = await tracedChatCompletion(
       {
         model,
         system: enhancedPrompt,
         prompt: `Research this topic: ${query}`,
-        tools,
-        maxSteps: depth === "comprehensive" ? 8 : depth === "quick" ? 3 : 5,
       },
       traceCtx
     );

@@ -1,7 +1,5 @@
 import { Hono } from "hono";
 import { DaprClient, HttpMethod, WorkflowRuntime, DaprWorkflowClient } from "@dapr/dapr";
-import { generateObject } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { readFile } from "node:fs/promises";
@@ -19,7 +17,8 @@ import {
   DAPR_PUBSUB_NAME,
   DAPR_STATE_STORE,
   TASK_RESULTS_TOPIC,
-  tracedGenerateText,
+  tracedChatCompletion,
+  chatCompletionWithSchema,
   type AgentRegistration,
   type TaskRequest,
   type TaskResult,
@@ -68,10 +67,6 @@ const MQTT_URL = process.env.MQTT_URL || "mqtt://rabbitmq.rabbitmq:1883";
 const MQTT_ENABLED = process.env.MQTT_ENABLED !== "false";
 
 // --- LLM Provider ---
-const llm = createOpenAI({
-  baseURL: LITELLM_BASE_URL,
-  apiKey: LITELLM_API_KEY,
-});
 
 // --- GitHub Client ---
 const github = GITHUB_TOKEN
@@ -391,7 +386,7 @@ async function consultArchitect(question: string, projectId?: string): Promise<u
 
       try {
         // Cast needed: project-manager uses ai@4 (LanguageModelV1), core uses ai@6 (LanguageModel)
-        await transitionClose(closeConfig, memory, llm(LLM_MODEL) as any);
+        await transitionClose(closeConfig, memory, LLM_MODEL);
       } catch (err) {
         console.warn(`[${AGENT_ID}] transitionClose failed for architect consultation:`, err);
       }
@@ -921,8 +916,8 @@ async function evaluateReviewGate(
     prompt = agentContext.prompt;
   }
 
-  const { object } = await generateObject({
-    model: llm(LLM_MODEL),
+  const { object } = await chatCompletionWithSchema({
+    model: LLM_MODEL,
     schema: ReviewResultSchema,
     system: systemPrompt,
     prompt,
@@ -946,7 +941,7 @@ async function evaluateReviewGate(
 
     try {
       // Cast needed: project-manager uses ai@4 (LanguageModelV1), core uses ai@6 (LanguageModel)
-      await transitionClose(closeConfig, memory, llm(LLM_MODEL) as any);
+      await transitionClose(closeConfig, memory, LLM_MODEL);
     } catch (error) {
       console.warn(`[${AGENT_ID}] transitionClose failed for ${gateType} gate:`, error);
     }
@@ -1493,14 +1488,14 @@ async function start(): Promise<void> {
       },
 
       reviewPlan: async (_ctx, input) => {
-        const { text } = await tracedGenerateText({
-          agentId: AGENT_ID,
-          traceId: crypto.randomUUID(),
-          model: llm(LLM_MODEL) as any,
-          system: "You are a technical plan reviewer. Evaluate this plan for completeness, technical soundness, and scope. Respond with JSON: { approved: boolean, feedback: string, confidence: number }",
-          prompt: `Review this implementation plan for issue #${input.issueNumber} in ${input.repoOwner}/${input.repoName}:\n\n${input.planContent}`,
-          eventLog: eventLog ?? undefined,
-        });
+        const { text } = await tracedChatCompletion(
+          {
+            model: LLM_MODEL,
+            system: "You are a technical plan reviewer. Evaluate this plan for completeness, technical soundness, and scope. Respond with JSON: { approved: boolean, feedback: string, confidence: number }",
+            prompt: `Review this implementation plan for issue #${input.issueNumber} in ${input.repoOwner}/${input.repoName}:\n\n${input.planContent}`,
+          },
+          eventLog ? { eventLog, traceId: crypto.randomUUID(), agentId: AGENT_ID } : undefined
+        );
         try {
           return JSON.parse(text);
         } catch {
@@ -1551,14 +1546,14 @@ async function start(): Promise<void> {
       },
 
       evaluateTestResults: async (_ctx, input) => {
-        const { text } = await tracedGenerateText({
-          agentId: AGENT_ID,
-          traceId: crypto.randomUUID(),
-          model: llm(LLM_MODEL) as any,
-          system: "You evaluate test results. Respond with JSON: { passed: boolean, failures: string[] }",
-          prompt: `Evaluate these test results for issue #${input.issueNumber}:\n\n${input.testContent}`,
-          eventLog: eventLog ?? undefined,
-        });
+        const { text } = await tracedChatCompletion(
+          {
+            model: LLM_MODEL,
+            system: "You evaluate test results. Respond with JSON: { passed: boolean, failures: string[] }",
+            prompt: `Evaluate these test results for issue #${input.issueNumber}:\n\n${input.testContent}`,
+          },
+          eventLog ? { eventLog, traceId: crypto.randomUUID(), agentId: AGENT_ID } : undefined
+        );
         try {
           return JSON.parse(text);
         } catch {

@@ -1,7 +1,5 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { generateObject, tool } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { Pool } from "pg";
 import {
@@ -9,7 +7,9 @@ import {
   AgentMemory,
   createAgentMemoryFromEnv,
   EventLog,
-  tracedGenerateText,
+  tracedChatCompletion,
+  chatCompletionWithSchema,
+  tool,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -38,10 +38,6 @@ const GRAFANA_API_KEY = process.env.GRAFANA_API_KEY || "";
 // const K8S_API_URL = process.env.K8S_API_URL || "https://kubernetes.default.svc";
 
 // --- LLM Provider ---
-const llm = createOpenAI({
-  baseURL: LITELLM_BASE_URL,
-  apiKey: LITELLM_API_KEY,
-});
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
@@ -503,22 +499,20 @@ async function handleConsultation(
 
   if (requireStructured) {
     // Step 1: Use tools to gather context and analysis
-    const { text: toolAnalysis } = await tracedGenerateText(
+    const { text: toolAnalysis } = await tracedChatCompletion(
       {
-        model: llm(LLM_MODEL),
+        model: LLM_MODEL,
         system: enhancedPrompt,
         prompt: `Analyze this architectural question and gather any relevant information using available tools. Then provide your analysis.
 
 Question: ${question}`,
-        tools,
-        maxSteps: 5,
       },
       traceCtx
     );
 
     // Step 2: Generate structured recommendation using the analysis
-    const { object } = await generateObject({
-      model: llm(LLM_MODEL),
+    const { object } = await chatCompletionWithSchema({
+      model: LLM_MODEL,
       schema: ArchitectureRecommendationSchema,
       system: enhancedPrompt,
       prompt: `Based on the following analysis, provide a structured architectural recommendation.
@@ -533,13 +527,11 @@ ${question}`,
     recommendation = object;
   } else {
     // Generate free-form text response with tool use
-    const { text } = await tracedGenerateText(
+    const { text } = await tracedChatCompletion(
       {
-        model: llm(LLM_MODEL),
+        model: LLM_MODEL,
         system: enhancedPrompt,
         prompt: question,
-        tools,
-        maxSteps: 5,
       },
       traceCtx
     );

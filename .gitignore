@@ -152,6 +152,7 @@ claude-events.db-shm
 # Planning docs
 docs/PLAN_PROMPT.md
 docs/PLAN_HANDOFF.md
+.docs/
 
 # History
 .history/

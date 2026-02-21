@@ -1,7 +1,5 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { generateObject, tool } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { Pool } from "pg";
 import {
@@ -9,7 +7,9 @@ import {
   AgentMemory,
   createAgentMemoryFromEnv,
   EventLog,
-  tracedGenerateText,
+  tracedChatCompletion,
+  chatCompletionWithSchema,
+  tool,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -38,10 +38,6 @@ const KUBECONFIG = process.env.KUBECONFIG || "";
 const KUBECTL_CONTEXT = process.env.KUBECTL_CONTEXT || "";
 
 // --- LLM Provider ---
-const llm = createOpenAI({
-  baseURL: LITELLM_BASE_URL,
-  apiKey: LITELLM_API_KEY,
-});
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
@@ -874,9 +870,9 @@ async function handleDebugRequest(
 
   // Step 1: Gather information using tools
   const traceId = crypto.randomUUID();
-  const { text: analysis } = await tracedGenerateText(
+  const { text: analysis } = await tracedChatCompletion(
     {
-      model: llm(LLM_MODEL),
+      model: LLM_MODEL,
       system: enhancedPrompt,
       prompt: `Debug the following Kubernetes issue:
 Namespace: ${namespace}
@@ -891,15 +887,13 @@ Investigate by:
 4. Describing resources that have issues
 
 Provide a thorough analysis.`,
-      tools,
-      maxSteps: 8,
     },
     eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
   );
 
   // Step 2: Generate structured result
-  const { object } = await generateObject({
-    model: llm(LLM_MODEL),
+  const { object } = await chatCompletionWithSchema({
+    model: LLM_MODEL,
     schema: DebugResultSchema,
     system: enhancedPrompt,
     prompt: `Create a structured debug report from this analysis:\n\n${analysis}`,

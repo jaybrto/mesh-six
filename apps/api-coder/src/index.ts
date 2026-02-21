@@ -1,7 +1,5 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { generateObject, tool } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { Pool } from "pg";
 import {
@@ -9,7 +7,9 @@ import {
   AgentMemory,
   createAgentMemoryFromEnv,
   EventLog,
-  tracedGenerateText,
+  tracedChatCompletion,
+  chatCompletionWithSchema,
+  tool,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -34,10 +34,6 @@ const LITELLM_API_KEY = process.env.LITELLM_API_KEY || "sk-local";
 const LLM_MODEL = process.env.LLM_MODEL || "anthropic/claude-sonnet-4-20250514";
 
 // --- LLM Provider ---
-const llm = createOpenAI({
-  baseURL: LITELLM_BASE_URL,
-  apiKey: LITELLM_API_KEY,
-});
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
@@ -750,13 +746,13 @@ async function handleCodeRequest(request: APICoderRequest): Promise<APIDesign | 
 
   switch (request.action) {
     case "design-api": {
-      const { text: analysis } = await tracedGenerateText(
-        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `Design a RESTful API based on these requirements.${contextPrompt}`, tools, maxSteps: 3 },
+      const { text: analysis } = await tracedChatCompletion(
+        { model: LLM_MODEL, system: enhancedPrompt, prompt: `Design a RESTful API based on these requirements.${contextPrompt}` },
         eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
       );
 
-      const { object } = await generateObject({
-        model: llm(LLM_MODEL),
+      const { object } = await chatCompletionWithSchema({
+        model: LLM_MODEL,
         schema: APIDesignSchema,
         system: enhancedPrompt,
         prompt: `Create a structured API design based on this analysis:\n\n${analysis}`,
@@ -766,13 +762,13 @@ async function handleCodeRequest(request: APICoderRequest): Promise<APIDesign | 
     }
 
     case "generate-code": {
-      const { text: analysis } = await tracedGenerateText(
-        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `Generate backend API code for these requirements.${contextPrompt}`, tools, maxSteps: 3 },
+      const { text: analysis } = await tracedChatCompletion(
+        { model: LLM_MODEL, system: enhancedPrompt, prompt: `Generate backend API code for these requirements.${contextPrompt}` },
         eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
       );
 
-      const { object } = await generateObject({
-        model: llm(LLM_MODEL),
+      const { object } = await chatCompletionWithSchema({
+        model: LLM_MODEL,
         schema: CodeGenerationSchema,
         system: enhancedPrompt,
         prompt: `Generate structured code output:\n\n${analysis}`,
@@ -782,13 +778,13 @@ async function handleCodeRequest(request: APICoderRequest): Promise<APIDesign | 
     }
 
     case "review-code": {
-      const { text: analysis } = await tracedGenerateText(
-        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `Review this code for quality, security, and best practices.${contextPrompt}`, tools, maxSteps: 3 },
+      const { text: analysis } = await tracedChatCompletion(
+        { model: LLM_MODEL, system: enhancedPrompt, prompt: `Review this code for quality, security, and best practices.${contextPrompt}` },
         eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
       );
 
-      const { object } = await generateObject({
-        model: llm(LLM_MODEL),
+      const { object } = await chatCompletionWithSchema({
+        model: LLM_MODEL,
         schema: CodeReviewSchema,
         system: enhancedPrompt,
         prompt: `Create a structured code review:\n\n${analysis}`,
@@ -798,8 +794,8 @@ async function handleCodeRequest(request: APICoderRequest): Promise<APIDesign | 
     }
 
     default: {
-      const { text } = await tracedGenerateText(
-        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `${request.action}:${contextPrompt}`, tools, maxSteps: 3 },
+      const { text } = await tracedChatCompletion(
+        { model: LLM_MODEL, system: enhancedPrompt, prompt: `${request.action}:${contextPrompt}` },
         eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
       );
       result = text;
