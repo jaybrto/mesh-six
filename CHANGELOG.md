@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add change detection for `docker/Dockerfile.llm-service` to trigger llm-service rebuilds
 - Add `mesh-six-llm-service` image tag override to prod kustomization overlay
 
+#### Docker
+- Fix `Dockerfile.llm-service`: install Claude CLI as `bun` user instead of root, add `~/.bun/bin` to `PATH` — resolves "Executable not found" at actor activation
+
 ### Fixed - 2026-02-20: Core LLM Module Type Fixes
 
 #### Core Library
