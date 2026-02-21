@@ -24,8 +24,10 @@ FROM registry.bto.bar/jaybrto/bun:1.2-slim
 
 WORKDIR /app
 
-# Install tar for credential archive operations
-RUN apt-get update -qq && apt-get install -y -qq tar && \
+# Install Claude CLI globally and tar, then fix permissions for bun user
+RUN bun install -g @anthropic-ai/claude-code && \
+    chmod -R a+rX /root/.bun && \
+    apt-get update -qq && apt-get install -y -qq tar && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy installed deps + source
@@ -35,15 +37,10 @@ COPY --from=builder /app .
 RUN mkdir -p /tmp/llm-service/actors && chown -R bun:bun /tmp/llm-service && \
     mkdir -p /home/bun && chown -R bun:bun /home/bun
 
+ENV AGENT_ENTRY="apps/llm-service/src/index.ts"
+
 # Run as non-root
 USER bun
-
-# Install Claude CLI globally as the bun user so it's accessible at runtime
-ENV BUN_INSTALL="/home/bun/.bun"
-ENV PATH="/home/bun/.bun/bin:${PATH}"
-RUN bun install -g @anthropic-ai/claude-code
-
-ENV AGENT_ENTRY="apps/llm-service/src/index.ts"
 
 EXPOSE 3000
 
