@@ -39,10 +39,11 @@ RUN mkdir -p /tmp/llm-service/actors && chown -R bun:bun /tmp/llm-service && \
 USER bun
 
 # Install Claude CLI globally as the bun user so it's accessible at runtime
+ENV BUN_INSTALL="/home/bun/.bun"
+ENV PATH="/home/bun/.bun/bin:${PATH}"
 RUN bun install -g @anthropic-ai/claude-code
 
 ENV AGENT_ENTRY="apps/llm-service/src/index.ts"
-ENV PATH="/home/bun/.bun/bin:${PATH}"
 
 EXPOSE 3000
 
