@@ -36,8 +36,8 @@ export interface ChatCompletionResult {
   };
 }
 
-export interface ChatCompletionWithSchemaOpts<T> extends ChatCompletionOpts {
-  schema: z.ZodType<T>;
+export interface ChatCompletionWithSchemaOpts<S extends z.ZodTypeAny = z.ZodTypeAny> extends ChatCompletionOpts {
+  schema: S;
 }
 
 export interface ChatCompletionWithSchemaResult<T> extends ChatCompletionResult {
@@ -221,9 +221,9 @@ export async function chatCompletion(
  * Injects the schema as JSON instructions into the prompt, requests JSON output,
  * then validates the response with Zod.
  */
-export async function chatCompletionWithSchema<T>(
-  opts: ChatCompletionWithSchemaOpts<T>,
-): Promise<ChatCompletionWithSchemaResult<T>> {
+export async function chatCompletionWithSchema<S extends z.ZodTypeAny>(
+  opts: ChatCompletionWithSchemaOpts<S>,
+): Promise<ChatCompletionWithSchemaResult<z.infer<S>>> {
   const messages = buildMessages(opts);
 
   // Inject schema instructions into the last user message
@@ -233,11 +233,9 @@ export async function chatCompletionWithSchema<T>(
   // Find last user message and append schema instructions
   let injected = false;
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") {
-      messages[i] = {
-        ...messages[i],
-        content: messages[i].content + schemaInstruction,
-      };
+    const msg = messages[i];
+    if (msg && msg.role === "user") {
+      messages[i] = { ...msg, content: msg.content + schemaInstruction };
       injected = true;
       break;
     }
@@ -298,7 +296,7 @@ export async function chatCompletionWithSchema<T>(
   // Extract JSON from the response (handle markdown code blocks)
   let jsonStr = text.trim();
   const fenceMatch = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (fenceMatch) {
+  if (fenceMatch?.[1]) {
     jsonStr = fenceMatch[1].trim();
   }
 

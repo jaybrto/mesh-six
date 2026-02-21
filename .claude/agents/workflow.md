@@ -21,7 +21,7 @@ You develop the project-manager's Dapr Workflow state machine and related workfl
 - **Workflow engine**: Dapr Workflow (durable, survives pod restarts)
 - **GitHub integration**: `@octokit/rest` v21
 - **Progress reporting**: MQTT (`mqtt` v5)
-- **LLM**: Vercel AI SDK via LiteLLM
+- **LLM**: `@mesh-six/core` llm module via LiteLLM
 
 ## State Machine
 

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - 2026-02-20: Core LLM Module Type Fixes
+
+#### Core Library
+- **@mesh-six/core@0.6.1**: Fix typecheck failures in `llm.ts` and remove dead `ai.ts`
+  - Change `chatCompletionWithSchema` generic from `z.ZodType<T>` to `S extends z.ZodTypeAny` so `z.infer<S>` preserves Zod optional field types — fixes type assignment errors in api-coder, ui-agent, and any consumer using schemas with optional fields
+  - Fix `messages[i]` possibly-undefined strict mode errors in `chatCompletionWithSchema` (affected dashboard typecheck)
+  - Fix `fenceMatch[1]` possibly-undefined in JSON fence extraction
+  - Delete dead `ai.ts` and `ai.test.ts` that still imported removed `ai` (Vercel AI SDK) package
+
 ### Added - 2026-02-19: LLM Service (Dapr Actor-based Claude CLI Gateway)
 
 #### New Service: LLM Service
