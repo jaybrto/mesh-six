@@ -16,7 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `mesh-six-llm-service` image tag override to prod kustomization overlay
 
 #### Docker
-- Fix `Dockerfile.llm-service`: install Claude CLI as `bun` user instead of root, add `~/.bun/bin` to `PATH` — resolves "Executable not found" at actor activation
+- Fix `Dockerfile.llm-service`: install Claude CLI as root, chmod `/root` and `/root/.bun` world-readable — resolves "Executable not found" at actor activation
+- Bump llm-service memory limits from 512Mi to 2Gi (Claude CLI OOMKilled at 512Mi)
+
+#### LLM Service
+- **@mesh-six/llm-service@0.1.1**: Fix `validateCLI` to only reject on auth errors, not non-zero exit codes — CLI returns exit 1 with valid JSON init messages in `--output-format json` mode
 
 ### Fixed - 2026-02-20: Core LLM Module Type Fixes
 
