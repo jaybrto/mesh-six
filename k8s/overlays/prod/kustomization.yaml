@@ -41,3 +41,5 @@ images:
     newTag: latest
   - name: registry.bto.bar/jaybrto/mesh-six-webhook-receiver
     newTag: latest
+  - name: registry.bto.bar/jaybrto/mesh-six-llm-service
+    newTag: latest
