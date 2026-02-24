@@ -1,62 +1,168 @@
 # Feature 13 — Responsive Layout & Tablet Adaptive UI
 
-> Ensures the app looks great on both the Pixel 10 Pro XL (phone) and large
-> Android tablets. Implements adaptive navigation and layout scaffolding.
+> Uses **Compose Material 3 Adaptive Library** to handle all responsive layout
+> automatically. Zero manual breakpoint math — the library detects Window Size
+> Classes and switches between bottom nav, rail, drawer, and list/detail splits.
 
 ## Dependencies
 
-- **Feature 01** — Project Setup (Navigation, Theme)
+- **Feature 01** — Project Setup (Navigation, Theme, M3 Adaptive dependencies)
 
 ## Depended On By
 
-- All screen features (04-09, 12) use the adaptive layout scaffold
+- All screen features (04-09, 12) use the adaptive layout scaffolding
 
 ---
 
 ## Objective
 
-Implement a responsive navigation and layout system that automatically adapts
-between phone and tablet form factors. Phones use bottom navigation; tablets
-use a navigation rail. List/detail screens show side-by-side on tablets.
+Leverage the Material 3 Adaptive library to provide automatic responsive
+navigation and layout across phone (Pixel 10 Pro XL) and tablet (12.2" Android 16
+Tablet with 2.5K display). The library handles all Window Size Class detection
+and navigation mode switching — no manual breakpoint calculations needed.
 
 ---
 
-## Window Size Classes
+## Target Devices
 
-| Class | Width | Example Device | Navigation | Layout |
-|-------|-------|----------------|------------|--------|
-| Compact | < 600dp | Pixel 10 Pro XL (portrait) | Bottom nav | Single column |
-| Medium | 600-840dp | Pixel 10 Pro XL (landscape), Small tablet | Navigation rail | Two-column where applicable |
-| Expanded | > 840dp | Large tablet landscape | Navigation rail | List+detail side-by-side |
+| Device | Display | Window Size Class | Navigation Mode |
+|--------|---------|-------------------|-----------------|
+| Pixel 10 Pro XL (portrait) | ~6.9" | Compact | Bottom nav bar |
+| Pixel 10 Pro XL (landscape) | ~6.9" | Medium | Navigation rail |
+| 12.2" Tablet (portrait) | 2.5K | Medium/Expanded | Navigation rail |
+| 12.2" Tablet (landscape) | 2.5K | Expanded | Navigation rail/drawer |
 
 ---
 
-## Architecture
+## Architecture — M3 Adaptive Components
 
+### 1. NavigationSuiteScaffold (Top-Level Navigation)
+
+Replaces all manual `NavigationBar` / `NavigationRail` switching. The library
+automatically selects the correct navigation chrome based on Window Size Class:
+
+- **Compact** → Bottom navigation bar
+- **Medium** → Navigation rail
+- **Expanded** → Navigation rail or permanent drawer
+
+**Reference implementation**: `android/app/src/main/kotlin/bar/bto/meshsix/ui/navigation/MainScaffold.kt`
+
+```kotlin
+enum class AdminDestination(
+    val label: String,
+    val icon: ImageVector,
+    val contentDescription: String,
+) {
+    DASHBOARD("Dashboard", Icons.Default.Dashboard, "Dashboard home"),
+    AGENTS("Agents", Icons.Default.Group, "Agent registry"),
+    SETTINGS("Settings", Icons.Default.Settings, "App settings"),
+}
+
+@Composable
+fun MainScaffold() {
+    var currentDestination by rememberSaveable { mutableStateOf(AdminDestination.DASHBOARD) }
+
+    NavigationSuiteScaffold(
+        navigationSuiteItems = {
+            AdminDestination.entries.forEach { destination ->
+                item(
+                    icon = { Icon(destination.icon, destination.contentDescription) },
+                    label = { Text(destination.label) },
+                    selected = destination == currentDestination,
+                    onClick = { currentDestination = destination },
+                )
+            }
+        },
+    ) {
+        when (currentDestination) {
+            AdminDestination.DASHBOARD -> DashboardScreen()
+            AdminDestination.AGENTS -> AgentsScreen()
+            AdminDestination.SETTINGS -> SettingsScreen()
+        }
+    }
+}
 ```
-┌────────────────────────────────────────────────────────────┐
-│                   MeshSixNavGraph                           │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  AdaptiveScaffold                                     │  │
-│  │                                                        │  │
-│  │  Compact:                                              │  │
-│  │  ┌──────────────────────────────────────────────┐    │  │
-│  │  │           Content Area                        │    │  │
-│  │  ├──────────────────────────────────────────────┤    │  │
-│  │  │  [Home] [Agents] [Sessions] [Tasks] [More]   │    │  │
-│  │  └──────────────────────────────────────────────┘    │  │
-│  │                                                        │  │
-│  │  Medium / Expanded:                                    │  │
-│  │  ┌─────┬────────────────────────────────────────┐    │  │
-│  │  │     │                                         │    │  │
-│  │  │ NAV │           Content Area                  │    │  │
-│  │  │RAIL │                                         │    │  │
-│  │  │     │                                         │    │  │
-│  │  └─────┴────────────────────────────────────────┘    │  │
-│  └──────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────┘
+
+### 2. NavigableListDetailPaneScaffold (List-Detail Screens)
+
+Replaces all manual list/detail split logic. The library automatically:
+- **Compact**: Shows list full-screen, navigates to detail on tap, supports predictive back
+- **Medium/Expanded**: Shows list + detail side-by-side with automatic pane proportions
+
+Used by: **Agents (Feature 05)**, **Claude Sessions (Feature 06)**, **Projects (Feature 08)**
+
+**Reference implementation**: `android/app/src/main/kotlin/bar/bto/meshsix/ui/screens/AgentsScreen.kt`
+
+```kotlin
+@Composable
+fun AgentsScreen() {
+    val navigator = rememberListDetailPaneScaffoldNavigator<AgentData>()
+
+    NavigableListDetailPaneScaffold(
+        navigator = navigator,
+        listPane = {
+            AgentListPane(
+                agents = agents,
+                onAgentClick = { agent ->
+                    navigator.navigateTo(
+                        ListDetailPaneScaffoldRole.Detail,
+                        agent,
+                    )
+                },
+            )
+        },
+        detailPane = {
+            val agent = navigator.currentDestination?.contentKey
+            if (agent != null) {
+                AgentDetailPane(agent = agent)
+            } else {
+                EmptyDetailPlaceholder()
+            }
+        },
+    )
+}
 ```
+
+The `@Parcelize` annotation on data classes enables the scaffold to preserve
+selection state across configuration changes (rotation, window resize).
+
+### 3. GridCells.Adaptive (Dashboard Grid)
+
+Replaces manual column-count calculations. The grid automatically fills the
+available width:
+
+- **Pixel 10 Pro XL** (portrait, ~393dp): 2 columns
+- **Pixel 10 Pro XL** (landscape, ~851dp): 4-5 columns
+- **12.2" Tablet** (portrait, ~800dp): 4 columns
+- **12.2" Tablet** (landscape, ~1280dp): 7+ columns
+
+**Reference implementation**: `android/app/src/main/kotlin/bar/bto/meshsix/ui/screens/DashboardScreen.kt`
+
+```kotlin
+LazyVerticalGrid(
+    columns = GridCells.Adaptive(minSize = 160.dp),
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+) {
+    items(summaryCards) { card ->
+        SummaryCard(title = card.title, value = card.value, subtitle = card.subtitle)
+    }
+}
+```
+
+---
+
+## Key Dependencies (in `app/build.gradle.kts`)
+
+```kotlin
+// Material 3 Adaptive — the backbone of responsive layout
+implementation(libs.adaptive)                      // androidx.compose.material3.adaptive:adaptive
+implementation(libs.adaptive.layout)               // adaptive-layout
+implementation(libs.adaptive.navigation)           // adaptive-navigation
+implementation(libs.adaptive.navigation.suite)     // adaptive-navigation-suite
+```
+
+Version: **1.1.0** (via `libs.versions.toml`)
 
 ---
 
@@ -65,281 +171,67 @@ use a navigation rail. List/detail screens show side-by-side on tablets.
 ```
 app/src/main/kotlin/bar/bto/meshsix/
 ├── ui/
-│   ├── adaptive/
-│   │   ├── AdaptiveScaffold.kt        # Main adaptive navigation scaffold
-│   │   ├── WindowSizeClass.kt         # Window size class calculation
-│   │   ├── NavigationItems.kt         # Shared navigation destinations
-│   │   └── ListDetailLayout.kt        # Reusable list+detail pattern
-│   └── theme/
-│       └── Dimensions.kt             # Adaptive padding/spacing values
+│   ├── navigation/
+│   │   └── MainScaffold.kt               # NavigationSuiteScaffold (top-level)
+│   └── screens/
+│       ├── AgentsScreen.kt               # NavigableListDetailPaneScaffold
+│       ├── DashboardScreen.kt            # GridCells.Adaptive grid
+│       └── SettingsScreen.kt             # Simple scrollable column
 ```
+
+No custom `AdaptiveScaffold.kt`, `WindowSizeClass.kt`, `ListDetailLayout.kt`,
+or `Dimensions.kt` files needed — the M3 Adaptive library replaces all of these.
 
 ---
 
-## Implementation Tasks
+## What Changed From the Original Plan
 
-### 13.1 — WindowSizeClass
+| Before (Custom) | After (M3 Adaptive Library) |
+|------------------|-----------------------------|
+| `WindowSizeClass` enum + `calculateWindowWidthClass()` | Library auto-detects via `WindowSizeClass` |
+| `AdaptiveScaffold` with manual `NavigationBar` / `NavigationRail` switching | `NavigationSuiteScaffold` handles everything |
+| `ListDetailLayout` with manual `Row` + `weight()` splits | `NavigableListDetailPaneScaffold` handles everything |
+| `Dimensions.cardGrid()` with manual column counts | `GridCells.Adaptive(minSize = 160.dp)` auto-fills |
+| Bottom nav overflow "More" menu for 7+ destinations | `NavigationSuiteScaffold` handles overflow natively |
+| Manual `BackHandler` for phone detail→list navigation | `NavigableListDetailPaneScaffold` supports predictive back |
 
-```kotlin
-enum class WindowWidthClass { COMPACT, MEDIUM, EXPANDED }
+**Lines of custom responsive code eliminated**: ~250+ lines replaced by 4 library imports.
 
-@Composable
-fun calculateWindowWidthClass(): WindowWidthClass {
-    val configuration = LocalConfiguration.current
-    val widthDp = configuration.screenWidthDp
+---
 
-    return when {
-        widthDp < 600 -> WindowWidthClass.COMPACT
-        widthDp < 840 -> WindowWidthClass.MEDIUM
-        else -> WindowWidthClass.EXPANDED
-    }
-}
-```
+## Predictive Back Gesture
 
-Or use the official Material 3 `material3-window-size-class` artifact:
-```kotlin
-val windowSizeClass = calculateWindowSizeClass(this)
-```
-
-### 13.2 — AdaptiveScaffold
-
-```kotlin
-@Composable
-fun AdaptiveScaffold(
-    navController: NavHostController,
-    windowWidthClass: WindowWidthClass,
-    content: @Composable () -> Unit,
-) {
-    val destinations = NavigationItems.all
-
-    when (windowWidthClass) {
-        WindowWidthClass.COMPACT -> {
-            Scaffold(
-                bottomBar = {
-                    NavigationBar {
-                        destinations.take(5).forEach { dest ->
-                            NavigationBarItem(
-                                icon = { Icon(dest.icon, contentDescription = dest.label) },
-                                label = { Text(dest.label) },
-                                selected = currentRoute == dest.route,
-                                onClick = { navController.navigate(dest.route) },
-                            )
-                        }
-                    }
-                },
-            ) { padding ->
-                Box(modifier = Modifier.padding(padding)) {
-                    content()
-                }
-            }
-        }
-
-        WindowWidthClass.MEDIUM,
-        WindowWidthClass.EXPANDED -> {
-            Row {
-                NavigationRail(
-                    header = {
-                        Text(
-                            text = "M6",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MeshColors.MeshGreen,
-                            modifier = Modifier.padding(vertical = 16.dp),
-                        )
-                    },
-                ) {
-                    destinations.forEach { dest ->
-                        NavigationRailItem(
-                            icon = { Icon(dest.icon, contentDescription = dest.label) },
-                            label = { Text(dest.label) },
-                            selected = currentRoute == dest.route,
-                            onClick = { navController.navigate(dest.route) },
-                        )
-                    }
-                }
-                Box(modifier = Modifier.weight(1f)) {
-                    content()
-                }
-            }
-        }
-    }
-}
-```
-
-### 13.3 — NavigationItems
-
-```kotlin
-object NavigationItems {
-    data class Destination(
-        val route: String,
-        val label: String,
-        val icon: ImageVector,
-    )
-
-    val all = listOf(
-        Destination("dashboard", "Home", Icons.Default.Dashboard),
-        Destination("agents", "Agents", Icons.Default.Group),
-        Destination("sessions", "Sessions", Icons.Default.Terminal),
-        Destination("tasks", "Tasks", Icons.Default.List),
-        Destination("projects", "Projects", Icons.Default.Folder),
-        Destination("llm-actors", "LLM", Icons.Default.Memory),
-        Destination("settings", "Settings", Icons.Default.Settings),
-    )
-
-    // Compact mode shows 5 items: Home, Agents, Sessions, Tasks, More
-    // "More" expands to Projects, LLM, Settings
-}
-```
-
-### 13.4 — ListDetailLayout
-
-Reusable pattern for screens that have a list and a detail view
-(Sessions, Agents, Projects):
-
-```kotlin
-@Composable
-fun <T> ListDetailLayout(
-    windowWidthClass: WindowWidthClass,
-    items: List<T>,
-    selectedItem: T?,
-    onSelectItem: (T) -> Unit,
-    listContent: @Composable (T, Boolean) -> Unit,
-    detailContent: @Composable (T) -> Unit,
-    emptyDetailContent: @Composable () -> Unit = {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("Select an item", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    },
-) {
-    when (windowWidthClass) {
-        WindowWidthClass.COMPACT -> {
-            // Phone: List only, detail via navigation or bottom sheet
-            LazyColumn {
-                items(items) { item ->
-                    listContent(item, item == selectedItem)
-                }
-            }
-        }
-
-        WindowWidthClass.MEDIUM -> {
-            // Medium: 40/60 split
-            Row(modifier = Modifier.fillMaxSize()) {
-                LazyColumn(modifier = Modifier.weight(0.4f)) {
-                    items(items) { item ->
-                        listContent(item, item == selectedItem)
-                    }
-                }
-                VerticalDivider()
-                Box(modifier = Modifier.weight(0.6f)) {
-                    if (selectedItem != null) {
-                        detailContent(selectedItem)
-                    } else {
-                        emptyDetailContent()
-                    }
-                }
-            }
-        }
-
-        WindowWidthClass.EXPANDED -> {
-            // Expanded: 30/70 split
-            Row(modifier = Modifier.fillMaxSize()) {
-                LazyColumn(modifier = Modifier.weight(0.3f)) {
-                    items(items) { item ->
-                        listContent(item, item == selectedItem)
-                    }
-                }
-                VerticalDivider()
-                Box(modifier = Modifier.weight(0.7f)) {
-                    if (selectedItem != null) {
-                        detailContent(selectedItem)
-                    } else {
-                        emptyDetailContent()
-                    }
-                }
-            }
-        }
-    }
-}
-```
-
-### 13.5 — Adaptive Dimensions
-
-```kotlin
-object Dimensions {
-    @Composable
-    fun screenPadding(windowWidthClass: WindowWidthClass): PaddingValues {
-        return when (windowWidthClass) {
-            WindowWidthClass.COMPACT -> PaddingValues(16.dp)
-            WindowWidthClass.MEDIUM -> PaddingValues(24.dp)
-            WindowWidthClass.EXPANDED -> PaddingValues(32.dp)
-        }
-    }
-
-    @Composable
-    fun cardGrid(windowWidthClass: WindowWidthClass): Int {
-        return when (windowWidthClass) {
-            WindowWidthClass.COMPACT -> 2   // 2-column grid
-            WindowWidthClass.MEDIUM -> 3    // 3-column grid
-            WindowWidthClass.EXPANDED -> 4  // 4-column grid
-        }
-    }
-}
-```
-
-### 13.6 — Bottom Nav Overflow ("More" Menu)
-
-On compact screens, the bottom nav bar has 5 slots. With 7 destinations,
-use a "More" item that shows a popup menu:
-
-```kotlin
-// In the bottom navigation bar, the 5th item:
-NavigationBarItem(
-    icon = { Icon(Icons.Default.MoreHoriz, contentDescription = "More") },
-    label = { Text("More") },
-    selected = currentRoute in listOf("projects", "llm-actors", "settings"),
-    onClick = { showMoreMenu = true },
-)
-
-// DropdownMenu with remaining destinations
-DropdownMenu(expanded = showMoreMenu, onDismissRequest = { showMoreMenu = false }) {
-    DropdownMenuItem(
-        text = { Text("Projects") },
-        onClick = { navController.navigate("projects"); showMoreMenu = false },
-    )
-    DropdownMenuItem(
-        text = { Text("LLM Actors") },
-        onClick = { navController.navigate("llm-actors"); showMoreMenu = false },
-    )
-    DropdownMenuItem(
-        text = { Text("Settings") },
-        onClick = { navController.navigate("settings"); showMoreMenu = false },
-    )
-}
-```
+`NavigableListDetailPaneScaffold` provides built-in support for Android's
+predictive back gesture. Combined with `android:enableOnBackInvokedCallback="true"`
+in the AndroidManifest, users see a smooth peek animation when swiping back from
+detail to list on phone form factors.
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] Phone (compact): Bottom navigation bar with 5 items + More menu
-- [ ] Tablet (medium/expanded): Navigation rail with all 7 items
-- [ ] Window size class updates on orientation change
-- [ ] ListDetailLayout shows list-only on phone, split on tablet
-- [ ] Content padding adapts to screen size
-- [ ] Dashboard card grid: 2 columns on phone, 3-4 on tablet
+- [ ] Phone (compact): `NavigationSuiteScaffold` renders bottom navigation bar
+- [ ] Tablet (medium/expanded): `NavigationSuiteScaffold` renders navigation rail
+- [ ] Navigation mode updates on orientation change without manual breakpoint code
+- [ ] `NavigableListDetailPaneScaffold` shows list-only on phone, split on tablet
+- [ ] `NavigableListDetailPaneScaffold` supports predictive back gesture on phone
+- [ ] `GridCells.Adaptive(160.dp)` auto-fills 2 cols on phone, 4+ on tablet
 - [ ] Navigation state is preserved across configuration changes
-- [ ] Smooth animation on orientation change
 - [ ] Edge-to-edge display works on all form factors
+- [ ] No custom `WindowSizeClass`, `AdaptiveScaffold`, or `ListDetailLayout` code exists
+- [ ] All four M3 Adaptive dependencies are in the build configuration
 
 ---
 
 ## Notes for Implementer
 
-- This feature provides the **scaffolding** used by all other screens. It should be implemented early (Wave 2) so screens can use `ListDetailLayout` and `AdaptiveScaffold` from the start.
-- Use the official `material3-window-size-class` library from the Compose BOM.
-- The `ListDetailLayout` is used by: Sessions (Feature 06), Agents (Feature 05), Projects (Feature 08).
-- Test with both the Pixel 10 Pro XL and a large tablet emulator (e.g., Pixel Tablet).
-- Consider using `BackHandler` on phone to navigate from detail back to list.
-- The navigation rail should show the mesh-six logo/wordmark in the header slot.
+- This feature is **already bootstrapped** in the `android/` directory. The reference
+  implementations in `MainScaffold.kt`, `AgentsScreen.kt`, and `DashboardScreen.kt`
+  demonstrate all three M3 Adaptive patterns.
+- **Do NOT write custom breakpoint logic.** The library handles everything.
+- The `NavigableListDetailPaneScaffold` requires data classes passed as `contentKey`
+  to implement `@Parcelize` for state preservation.
+- Test with both the Pixel 10 Pro XL emulator and a large tablet emulator
+  (e.g., Pixel Tablet or custom 12.2" AVD).
+- Official docs: [Adaptive Navigation Suite](https://developer.android.com/develop/ui/compose/layouts/adaptive/build-adaptive-navigation)
+  and [List-Detail Layout](https://developer.android.com/develop/ui/compose/layouts/adaptive/list-detail)

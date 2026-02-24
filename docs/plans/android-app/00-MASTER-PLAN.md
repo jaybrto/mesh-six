@@ -6,6 +6,8 @@
 > **Target devices**: Pixel 10 Pro XL, large Android tablets
 > **Build environment**: Claude Code CLI on MacBook Pro M3 2023
 > **Architecture**: Kotlin + Jetpack Compose, MVVM with Kotlin Flow
+> **Responsive framework**: Compose Material 3 Adaptive Library
+> **Secondary target**: 12.2" Android 16 Tablet (Octa-core, 48GB RAM, 2.5K Display)
 
 ---
 
@@ -233,17 +235,21 @@ data class LlmHookEvent(
 
 | Component | Library | Version | Notes |
 |-----------|---------|---------|-------|
-| Language | Kotlin | 2.0+ | |
-| UI | Jetpack Compose | BOM 2024+ | Material 3 |
+| Language | Kotlin | 2.1.0 | |
+| UI | Jetpack Compose | BOM 2025.01.01 | Material 3 |
+| **Responsive** | **M3 Adaptive** | **1.1.0** | **NavigationSuiteScaffold + NavigableListDetailPaneScaffold** |
+| Adaptive Nav Suite | `material3-adaptive-navigation-suite` | BOM | Auto bottom-bar / rail / drawer |
+| Adaptive Layout | `adaptive-layout` | 1.1.0 | ListDetailPaneScaffold |
+| Adaptive Navigation | `adaptive-navigation` | 1.1.0 | NavigableListDetailPaneScaffold + predictive back |
 | MQTT | hannesa2/paho.mqtt.android | v3.6.4 | JitPack |
 | HTTP | OkHttp | 4.12.0 | REST + WSS |
-| JSON | Kotlinx Serialization | 1.6+ | |
-| DI | Hilt | 2.50+ | |
-| Navigation | Compose Navigation | | |
+| JSON | Kotlinx Serialization | 1.7.3 | |
+| DI | Hilt | 2.53.1 | |
+| Navigation | Compose Navigation | 2.8.6 | |
 | State | Kotlin Flow + StateFlow | | |
 | Push | ntfy.sh | | Self-hosted, no Firebase |
 | Architecture | MVVM | | ViewModel + Repository |
-| Build | Gradle KTS | | AGP 8.x |
+| Build | Gradle KTS | | AGP 8.7.3 |
 | Min SDK | 28 (Android 9) | | Pixel 10 Pro XL ships with Android 16 |
 | Target SDK | 35 (Android 15) | | Latest stable |
 
@@ -259,6 +265,8 @@ data class LlmHookEvent(
 | No terminal view | Removed | User specified terminal doesn't apply. |
 | Paho MQTT over HiveMQ | Paho | More mature, better Android lifecycle support. |
 | Kotlinx Serialization over Gson | Kotlinx | Kotlin-native, compile-time safe, smaller. |
+| **M3 Adaptive over manual breakpoints** | **NavigationSuiteScaffold + NavigableListDetailPaneScaffold** | **Zero manual breakpoint math. Library handles bottom nav ↔ rail ↔ drawer and list/detail pane splitting automatically based on Window Size Classes.** |
+| **GridCells.Adaptive** | **LazyVerticalGrid** | **Dashboard cards auto-fill 2 cols on phone, 3-4+ on 2.5K tablet display without hardcoded column counts.** |
 
 ---
 

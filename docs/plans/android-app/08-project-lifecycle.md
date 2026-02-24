@@ -251,10 +251,20 @@ fun TransitionHistory(
 
 ---
 
+## Tablet Layout — NavigableListDetailPaneScaffold
+
+On tablets, the project screen uses `NavigableListDetailPaneScaffold` from M3
+Adaptive (Feature 13) to show the project list and detail (with state machine
+visualization and transition history) side-by-side. On phones, tapping a project
+navigates to a full-screen detail view with predictive back gesture support.
+
+---
+
 ## Notes for Implementer
 
 - Reference `ProjectLifecycle.tsx` from the web dashboard. Match the state list and behavior.
 - The 8 states are: CREATE, PLANNING, REVIEW, IN_PROGRESS, QA, DEPLOY, VALIDATE, ACCEPTED.
 - MQTT payloads may include `projectId`, `id`, `state`, `status`, `name`, `projectName`, `timestamp` — normalize these like the web dashboard does.
 - For the state machine visualization on phone, use `FlowRow` (from Compose Foundation) to wrap states into 2-3 rows. On tablets, a single `Row` should fit.
-- Consider using a grid layout (2 or 3 columns) for the project card list on phones.
+- Use `NavigableListDetailPaneScaffold` for the list-detail layout. Project data classes must implement `@Parcelize` for state preservation.
+- See `AgentsScreen.kt` in the bootstrapped `android/` directory for the reference implementation of the list-detail pattern.

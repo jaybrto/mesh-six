@@ -160,21 +160,26 @@ Each event carries:
 └──────────────────────────────────────┘
 ```
 
-### Tablet Layout (Session List + Detail Side-by-Side)
+### Tablet Layout — NavigableListDetailPaneScaffold
+
+Uses `NavigableListDetailPaneScaffold` from M3 Adaptive to automatically
+show list + detail side-by-side on tablets. `NavigationSuiteScaffold` renders
+the rail on the left. On phones, the scaffold shows the list full-screen and
+navigates to detail on tap with predictive back gesture support.
 
 ```
 ┌─────┬──────────────────┬─────────────────────────────────────┐
 │     │ Sessions (3)     │  abc123... • claude-opus-4-6        │
 │ NAV │                  │                                      │
 │RAIL │ ● abc123 opus    │  Branch: feature/add-auth            │
-│     │   feature/add-.. │  Active 12m • 42 events              │
-│[Ho] │   42 events      │                                      │
-│[Ag] │                  │  Tool Usage                           │
-│[Se] │ ● def456 sonnet  │  Write ████████████ 12               │
-│[Ta] │   main           │  Bash  ████████     8                │
-│[Pr] │   18 events      │                                      │
-│[LL] │                  │  Live Timeline                       │
-│[Se] │ ● ghi789 haiku   │  12:03:45  PostToolUse  Write       │
+│(M3  │   feature/add-.. │  Active 12m • 42 events              │
+│auto)│   42 events      │                                      │
+│     │                  │  Tool Usage                           │
+│ 🏠  │ ● def456 sonnet  │  Write ████████████ 12               │
+│ 👥  │   main           │  Bash  ████████     8                │
+│ ⚙️  │   18 events      │                                      │
+│     │                  │  Live Timeline                       │
+│     │ ● ghi789 haiku   │  12:03:45  PostToolUse  Write       │
 │     │   fix/memory-..  │  12:03:42  PreToolUse   Write       │
 │     │   156 events     │  12:03:30  PostToolUse  Bash        │
 │     │                  │  12:03:15  SubagentStart Explore    │
@@ -539,7 +544,8 @@ fun LiveIndicator(isActive: Boolean) {
 - [ ] "Jump to latest" FAB appears when user scrolls up
 - [ ] LIVE indicator pulses for active sessions
 - [ ] Error section highlights failed events with full error message
-- [ ] Tablet layout shows list + detail side-by-side
+- [ ] Tablet layout shows list + detail side-by-side via `NavigableListDetailPaneScaffold`
+- [ ] Phone layout uses full-screen list → detail navigation with predictive back
 - [ ] Events can be tapped to expand and show `tool_input`/`tool_response` details
 - [ ] Performance is smooth with 500+ events in a single session
 
@@ -555,3 +561,5 @@ fun LiveIndicator(isActive: Boolean) {
 - The `tool_input` expansion should show formatted JSON — use a monospace font and basic pretty-printing.
 - Consider a "clear ended sessions" action to manage memory.
 - The MQTT topic pattern `claude/progress/#` captures ALL sessions. The repository separates them by `session_id`.
+- Use `NavigableListDetailPaneScaffold` from M3 Adaptive (Feature 13) for the list-detail layout. Session data classes must implement `@Parcelize` for state preservation.
+- See `AgentsScreen.kt` in the bootstrapped `android/` directory for the reference implementation of the list-detail pattern.
