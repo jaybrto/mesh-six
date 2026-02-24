@@ -74,7 +74,7 @@ All infrastructure is pre-existing in the k3s cluster:
 - **PostgreSQL HA** (`pgsql.k3s.bto.bar:5432`, database `mesh_six`) — task history, repo registry, pgvector memories
 - **Redis Cluster** — Dapr state store for agent registry
 - **RabbitMQ HA** — Dapr pub/sub backbone, MQTT plugin for real-time events
-- **Ollama + LiteLLM** — LLM gateway (OpenAI-compatible API called directly via `@mesh-six/core` llm module)
+- **Ollama + LiteLLM** — LLM gateway (OpenAI-compatible API used via `@ai-sdk/openai`)
 - **Dapr** — sidecar injected via k8s annotations (`dapr.io/enabled: "true"`, `dapr.io/app-id`, `dapr.io/app-port: "3000"`)
 
 ### Database
@@ -98,7 +98,7 @@ Kustomize-based in `k8s/base/` with overlays in `k8s/overlays/{dev,prod}`. Each 
 - **Bun monorepo** with `workspaces: ["packages/*", "apps/*"]` — all deps shared at root
 - **TypeScript strict mode**, ESNext target, bundler module resolution
 - **Zod schemas** for all shared types in `@mesh-six/core` — use `Schema.parse()` at system boundaries
-- **LiteLLM direct** — LLM calls via `@mesh-six/core` llm module (`tracedChatCompletion`, `chatCompletionWithSchema`) hitting LiteLLM's OpenAI-compatible API directly via fetch
+- **Vercel AI SDK** (`ai` package + `@ai-sdk/openai`) for all LLM calls — models accessed via LiteLLM's OpenAI-compatible API
 - **`bun install --frozen-lockfile`** in CI/Docker; `bunfig.toml` enforces exact versions
 - Core library exports from `packages/core/src/index.ts` — import as `@mesh-six/core`
 - Agent registry uses an index key (`agent:_index`) since Redis via Dapr doesn't support prefix scans

@@ -26,21 +26,23 @@ android/
 │   ├── src/
 │   │   ├── main/
 │   │   │   ├── kotlin/bar/bto/meshsix/
-│   │   │   │   ├── MeshSixApp.kt              # Hilt Application class
-│   │   │   │   ├── MainActivity.kt             # Single-activity host
-│   │   │   │   ├── navigation/
-│   │   │   │   │   ├── MeshSixNavGraph.kt      # NavHost + route definitions
-│   │   │   │   │   └── Screen.kt               # Sealed class of route destinations
-│   │   │   │   └── ui/
-│   │   │   │       └── theme/
-│   │   │   │           ├── Theme.kt            # Material 3 dark theme
-│   │   │   │           ├── Color.kt            # mesh-six brand colors
-│   │   │   │           └── Type.kt             # Typography (monospace for data)
+│   │   │   │   ├── MeshSixApp.kt              # @HiltAndroidApp Application class
+│   │   │   │   ├── MainActivity.kt             # @AndroidEntryPoint single-activity host
+│   │   │   │   ├── ui/
+│   │   │   │   │   ├── navigation/
+│   │   │   │   │   │   └── MainScaffold.kt     # NavigationSuiteScaffold (M3 Adaptive)
+│   │   │   │   │   ├── screens/
+│   │   │   │   │   │   ├── DashboardScreen.kt  # GridCells.Adaptive summary grid
+│   │   │   │   │   │   ├── AgentsScreen.kt     # NavigableListDetailPaneScaffold
+│   │   │   │   │   │   └── SettingsScreen.kt   # Scrollable config display
+│   │   │   │   │   └── theme/
+│   │   │   │   │       ├── Theme.kt            # Material 3 dark theme
+│   │   │   │   │       ├── Color.kt            # mesh-six brand colors
+│   │   │   │   │       └── Type.kt             # Typography (monospace for data)
 │   │   │   ├── res/
 │   │   │   │   ├── values/
 │   │   │   │   │   ├── strings.xml
-│   │   │   │   │   ├── themes.xml              # Splash/compat theme
-│   │   │   │   │   └── colors.xml
+│   │   │   │   │   └── themes.xml              # Splash/compat theme
 │   │   │   │   ├── mipmap-*/                   # App icon
 │   │   │   │   └── drawable/                   # Vector assets
 │   │   │   └── AndroidManifest.xml
@@ -102,11 +104,15 @@ plugins {
 Key dependencies:
 | Group | Artifact | Version | Purpose |
 |-------|----------|---------|---------|
-| `androidx.compose` | BOM | 2024.12.01+ | Compose UI framework |
-| `androidx.navigation` | compose | 2.8+ | Navigation |
+| `androidx.compose` | BOM | 2025.01.01 | Compose UI framework |
+| `androidx.compose.material3.adaptive` | adaptive | 1.1.0 | M3 Adaptive core |
+| `androidx.compose.material3.adaptive` | adaptive-layout | 1.1.0 | ListDetailPaneScaffold |
+| `androidx.compose.material3.adaptive` | adaptive-navigation | 1.1.0 | NavigableListDetailPaneScaffold |
+| `androidx.compose.material3` | material3-adaptive-navigation-suite | BOM | NavigationSuiteScaffold |
+| `androidx.navigation` | compose | 2.8.6 | Navigation |
 | `androidx.hilt` | navigation-compose | 1.2+ | DI-aware navigation |
-| `com.google.dagger` | hilt-android | 2.50+ | Dependency injection |
-| `org.jetbrains.kotlinx` | serialization-json | 1.7+ | JSON parsing |
+| `com.google.dagger` | hilt-android | 2.53.1 | Dependency injection |
+| `org.jetbrains.kotlinx` | serialization-json | 1.7.3 | JSON parsing |
 | `com.squareup.okhttp3` | okhttp | 4.12.0 | HTTP client |
 | `com.github.hannesa2` | paho.mqtt.android | v3.6.4 | MQTT client |
 | `androidx.lifecycle` | viewmodel-compose | 2.8+ | ViewModel integration |
@@ -199,22 +205,48 @@ Dark theme matching the web dashboard's zinc/mesh color palette:
 
 Typography: `JetBrains Mono` for data/code text, system default for UI text.
 
-### 1.6 — Navigation Shell
+### 1.6 — Navigation Shell (M3 Adaptive)
 
-**`Screen.kt`**:
+**`MainScaffold.kt`** — Uses `NavigationSuiteScaffold` from M3 Adaptive to
+automatically switch between bottom nav (phone), rail (tablet portrait), and
+drawer (tablet landscape). No manual breakpoint logic needed.
+
 ```kotlin
-sealed class Screen(val route: String, val label: String) {
-    data object Dashboard : Screen("dashboard", "Home")
-    data object Agents : Screen("agents", "Agents")
-    data object Sessions : Screen("sessions", "Sessions")
-    data object Tasks : Screen("tasks", "Tasks")
-    data object Projects : Screen("projects", "Projects")
-    data object LlmActors : Screen("llm-actors", "LLM")
-    data object Settings : Screen("settings", "Settings")
+enum class AdminDestination(
+    val label: String,
+    val icon: ImageVector,
+    val contentDescription: String,
+) {
+    DASHBOARD("Dashboard", Icons.Default.Dashboard, "Dashboard home"),
+    AGENTS("Agents", Icons.Default.Group, "Agent registry"),
+    SETTINGS("Settings", Icons.Default.Settings, "App settings"),
+}
+
+@Composable
+fun MainScaffold() {
+    var currentDestination by rememberSaveable { mutableStateOf(AdminDestination.DASHBOARD) }
+    NavigationSuiteScaffold(
+        navigationSuiteItems = {
+            AdminDestination.entries.forEach { destination ->
+                item(
+                    icon = { Icon(destination.icon, destination.contentDescription) },
+                    label = { Text(destination.label) },
+                    selected = destination == currentDestination,
+                    onClick = { currentDestination = destination },
+                )
+            }
+        },
+    ) {
+        when (currentDestination) {
+            AdminDestination.DASHBOARD -> DashboardScreen()
+            AdminDestination.AGENTS -> AgentsScreen()
+            AdminDestination.SETTINGS -> SettingsScreen()
+        }
+    }
 }
 ```
 
-**`MeshSixNavGraph.kt`**: `Scaffold` with a bottom `NavigationBar` (phone) or `NavigationRail` (tablet). Routes to placeholder composables.
+**`MainActivity.kt`** calls `MainScaffold()` inside `MeshSixTheme`.
 
 ### 1.7 — AndroidManifest Permissions
 
@@ -238,7 +270,7 @@ Standard Android `.gitignore`: `.gradle/`, `build/`, `local.properties`, `*.apk`
 
 - [ ] `./gradlew assembleDebug` succeeds from `android/` directory
 - [ ] App launches on Pixel 10 Pro XL emulator (API 35)
-- [ ] App shows a scaffold with bottom navigation bar and placeholder screens
+- [ ] App shows `NavigationSuiteScaffold` with bottom nav (phone) or rail (tablet)
 - [ ] Dark theme with mesh-six brand colors applied
 - [ ] Hilt DI is configured and injectable
 - [ ] Navigation between all placeholder screens works

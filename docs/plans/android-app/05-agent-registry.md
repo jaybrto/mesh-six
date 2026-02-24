@@ -246,10 +246,23 @@ Bottom sheet showing full agent details when a card is tapped. Includes:
 
 ---
 
+## Tablet Layout — NavigableListDetailPaneScaffold
+
+On tablets, the agent registry uses `NavigableListDetailPaneScaffold` from M3
+Adaptive (Feature 13) to show the agent list and detail side-by-side. On phones,
+tapping an agent navigates to a full-screen detail view with predictive back
+gesture support.
+
+See `AgentsScreen.kt` in the bootstrapped `android/` directory for the reference
+implementation of this pattern.
+
+---
+
 ## Notes for Implementer
 
 - The web dashboard (`AgentRegistry.tsx`) is the reference implementation. Match its data handling but adapt the UI for mobile.
 - Agents arrive as individual MQTT messages. The repository should maintain a `Map<String, AgentRegistration>` keyed by `appId` and update on each message.
 - The heartbeat timestamp comes as ISO 8601 string — parse with `java.time.Instant` or `kotlinx-datetime`.
-- Consider using `LazyColumn` for the agent list to handle large numbers efficiently.
-- The bottom sheet should use `ModalBottomSheet` from Material 3 Compose.
+- Use `NavigableListDetailPaneScaffold` for the list-detail layout (replaces the bottom sheet pattern on tablets). On phones, the scaffold shows list full-screen and navigates to detail.
+- Agent data classes must implement `@Parcelize` for the scaffold's state preservation.
+- `LazyColumn` inside the list pane for efficient scrolling with 20+ agents.

@@ -1,13 +1,15 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 import type { AgentMemory, MemorySearchResult } from "./memory.js";
 
-// --- Mock chatCompletionWithSchema at module level before importing context ---
-let chatCompletionWithSchemaImpl: (...args: any[]) => any = () =>
-  Promise.resolve({ object: { memories: [] }, text: "", finishReason: "stop" });
+// --- Mock generateText at module level before importing context ---
+let generateTextImpl: (...args: any[]) => any = () =>
+  Promise.resolve({ output: null });
 
-mock.module("./llm.js", () => ({
-  chatCompletionWithSchema: (...args: any[]) =>
-    chatCompletionWithSchemaImpl(...args),
+mock.module("ai", () => ({
+  generateText: (...args: any[]) => generateTextImpl(...args),
+  Output: {
+    object: (opts: any) => opts,
+  },
 }));
 
 // Import after mocking
@@ -172,24 +174,21 @@ describe("buildAgentContext", () => {
 
 describe("transitionClose", () => {
   beforeEach(() => {
-    chatCompletionWithSchemaImpl = () =>
-      Promise.resolve({ object: { memories: [] }, text: "", finishReason: "stop" });
+    generateTextImpl = () => Promise.resolve({ output: null });
   });
 
   it("generates reflection via LLM and stores memories with correct scope", async () => {
     const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
-    chatCompletionWithSchemaImpl = mock(() =>
+    generateTextImpl = mock(() =>
       Promise.resolve({
-        object: {
+        output: {
           memories: [
             { content: "Agent handled edge case well", scope: "agent" },
             { content: "Task required special permissions", scope: "task" },
           ],
         },
-        text: "{}",
-        finishReason: "stop",
       })
     );
 
@@ -208,9 +207,9 @@ describe("transitionClose", () => {
       taskState: { issuesFound: 2 },
     };
 
-    await transitionClose(config, mem, "claude-sonnet");
+    await transitionClose(config, mem, {} as any);
 
-    expect(chatCompletionWithSchemaImpl).toHaveBeenCalledTimes(1);
+    expect(generateTextImpl).toHaveBeenCalledTimes(1);
     expect(storeMock).toHaveBeenCalledTimes(2);
 
     // First memory: scope "agent" -> userId = "agent-1"
@@ -230,8 +229,8 @@ describe("transitionClose", () => {
     const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
-    chatCompletionWithSchemaImpl = () =>
-      Promise.resolve({ object: { memories: [] }, text: "", finishReason: "stop" });
+    generateTextImpl = () =>
+      Promise.resolve({ output: { memories: [] } });
 
     const config: TransitionCloseConfig = {
       agentId: "agent-1",
@@ -242,7 +241,7 @@ describe("transitionClose", () => {
       taskState: {},
     };
 
-    await transitionClose(config, mem, "claude-sonnet");
+    await transitionClose(config, mem, {} as any);
     expect(storeMock).not.toHaveBeenCalled();
   });
 
@@ -250,8 +249,7 @@ describe("transitionClose", () => {
     const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
-    chatCompletionWithSchemaImpl = () =>
-      Promise.resolve({ object: null, text: "", finishReason: "stop" });
+    generateTextImpl = () => Promise.resolve({ output: null });
 
     const config: TransitionCloseConfig = {
       agentId: "agent-1",
@@ -262,7 +260,7 @@ describe("transitionClose", () => {
       taskState: {},
     };
 
-    await transitionClose(config, mem, "claude-sonnet");
+    await transitionClose(config, mem, {} as any);
     expect(storeMock).not.toHaveBeenCalled();
   });
 
@@ -270,10 +268,10 @@ describe("transitionClose", () => {
     const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
-    let capturedOpts: any = {};
-    chatCompletionWithSchemaImpl = mock((opts: any) => {
-      capturedOpts = opts;
-      return Promise.resolve({ object: { memories: [] }, text: "", finishReason: "stop" });
+    let capturedMessages: any[] = [];
+    generateTextImpl = mock((opts: any) => {
+      capturedMessages = opts.messages;
+      return Promise.resolve({ output: { memories: [] } });
     });
 
     const history = Array.from({ length: 10 }, (_, i) => ({
@@ -290,27 +288,25 @@ describe("transitionClose", () => {
       taskState: {},
     };
 
-    await transitionClose(config, mem, "claude-sonnet");
+    await transitionClose(config, mem, {} as any);
 
     // Messages: last 6 from history + 1 reflection prompt = 7
-    expect(capturedOpts.messages).toHaveLength(7);
+    expect(capturedMessages).toHaveLength(7);
     // First should be message 4 (10 - 6 = index 4)
-    expect(capturedOpts.messages[0].content).toBe("message 4");
+    expect(capturedMessages[0].content).toBe("message 4");
     // Last should be the reflection prompt
-    expect(capturedOpts.messages[6].content).toBe(REFLECTION_PROMPT);
+    expect(capturedMessages[6].content).toBe(REFLECTION_PROMPT);
   });
 
   it("resolveMemoryUserId: project scope uses project-{id}", async () => {
     const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
-    chatCompletionWithSchemaImpl = () =>
+    generateTextImpl = () =>
       Promise.resolve({
-        object: {
+        output: {
           memories: [{ content: "project insight", scope: "project" }],
         },
-        text: "{}",
-        finishReason: "stop",
       });
 
     const config: TransitionCloseConfig = {
@@ -323,7 +319,7 @@ describe("transitionClose", () => {
       taskState: {},
     };
 
-    await transitionClose(config, mem, "claude-sonnet");
+    await transitionClose(config, mem, {} as any);
 
     expect(storeMock).toHaveBeenCalledTimes(1);
     expect(storeMock.mock.calls[0]![1]).toBe("project-proj-42");
@@ -333,13 +329,11 @@ describe("transitionClose", () => {
     const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
-    chatCompletionWithSchemaImpl = () =>
+    generateTextImpl = () =>
       Promise.resolve({
-        object: {
+        output: {
           memories: [{ content: "project insight", scope: "project" }],
         },
-        text: "{}",
-        finishReason: "stop",
       });
 
     const config: TransitionCloseConfig = {
@@ -351,7 +345,7 @@ describe("transitionClose", () => {
       taskState: {},
     };
 
-    await transitionClose(config, mem, "claude-sonnet");
+    await transitionClose(config, mem, {} as any);
 
     expect(storeMock).toHaveBeenCalledTimes(1);
     expect(storeMock.mock.calls[0]![1]).toBe("agent-1");
@@ -361,13 +355,11 @@ describe("transitionClose", () => {
     const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
-    chatCompletionWithSchemaImpl = () =>
+    generateTextImpl = () =>
       Promise.resolve({
-        object: {
+        output: {
           memories: [{ content: "global learning", scope: "global" }],
         },
-        text: "{}",
-        finishReason: "stop",
       });
 
     const config: TransitionCloseConfig = {
@@ -379,7 +371,7 @@ describe("transitionClose", () => {
       taskState: {},
     };
 
-    await transitionClose(config, mem, "claude-sonnet");
+    await transitionClose(config, mem, {} as any);
 
     expect(storeMock.mock.calls[0]![1]).toBe("mesh-six-learning");
   });
@@ -388,13 +380,11 @@ describe("transitionClose", () => {
     const storeMock = mock((_messages: any[], _userId: string) => Promise.resolve());
     const mem = createMockMemory([], storeMock);
 
-    chatCompletionWithSchemaImpl = () =>
+    generateTextImpl = () =>
       Promise.resolve({
-        object: {
+        output: {
           memories: [{ content: "some insight", scope: "agent" }],
         },
-        text: "{}",
-        finishReason: "stop",
       });
 
     const config: TransitionCloseConfig = {
@@ -406,7 +396,7 @@ describe("transitionClose", () => {
       taskState: {},
     };
 
-    await transitionClose(config, mem, "claude-sonnet");
+    await transitionClose(config, mem, {} as any);
 
     const storedMessages = storeMock.mock.calls[0]![0];
     expect(storedMessages[0].role).toBe("system");

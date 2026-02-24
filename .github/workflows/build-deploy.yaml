@@ -45,7 +45,6 @@ jobs:
             homelab-monitor
             infra-manager
             kubectl-deployer
-            llm-service
             orchestrator
             project-manager
             qa-tester
@@ -95,11 +94,6 @@ jobs:
           # If Dockerfile.dashboard changed, add dashboard
           if echo "$CHANGED_FILES" | grep -q '^docker/Dockerfile.dashboard'; then
             AGENTS+=("dashboard")
-          fi
-
-          # If Dockerfile.llm-service changed, add llm-service
-          if echo "$CHANGED_FILES" | grep -q '^docker/Dockerfile.llm-service'; then
-            AGENTS+=("llm-service")
           fi
 
           # Deduplicate
@@ -158,8 +152,6 @@ jobs:
           DOCKERFILE="docker/Dockerfile.agent"
           if [ "${{ matrix.agent }}" = "dashboard" ]; then
             DOCKERFILE="docker/Dockerfile.dashboard"
-          elif [ "${{ matrix.agent }}" = "llm-service" ]; then
-            DOCKERFILE="docker/Dockerfile.llm-service"
           fi
           DEST="${{ env.REGISTRY }}/${{ env.ORG }}/${{ env.IMAGE_PREFIX }}-${{ matrix.agent }}"
           cat <<EOF | kubectl apply -f -

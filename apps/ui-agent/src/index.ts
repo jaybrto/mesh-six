@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
+import { generateObject, tool } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { Pool } from "pg";
 import {
@@ -7,9 +9,7 @@ import {
   AgentMemory,
   createAgentMemoryFromEnv,
   EventLog,
-  tracedChatCompletion,
-  chatCompletionWithSchema,
-  tool,
+  tracedGenerateText,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -34,6 +34,10 @@ const LITELLM_API_KEY = process.env.LITELLM_API_KEY || "sk-local";
 const LLM_MODEL = process.env.LLM_MODEL || "anthropic/claude-sonnet-4-20250514";
 
 // --- LLM Provider ---
+const llm = createOpenAI({
+  baseURL: LITELLM_BASE_URL,
+  apiKey: LITELLM_API_KEY,
+});
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
@@ -601,13 +605,13 @@ async function handleUIRequest(request: UIRequest): Promise<UIDesign | Component
 
   switch (request.action) {
     case "design-ui": {
-      const { text: analysis } = await tracedChatCompletion(
-        { model: LLM_MODEL, system: enhancedPrompt, prompt: `Design a UI system for this project.${contextPrompt}` },
+      const { text: analysis } = await tracedGenerateText(
+        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `Design a UI system for this project.${contextPrompt}`, tools, maxSteps: 3 },
         eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
       );
 
-      const { object } = await chatCompletionWithSchema({
-        model: LLM_MODEL,
+      const { object } = await generateObject({
+        model: llm(LLM_MODEL),
         schema: UIDesignSchema,
         system: enhancedPrompt,
         prompt: `Create a structured UI design based on this analysis:\n\n${analysis}`,
@@ -618,13 +622,13 @@ async function handleUIRequest(request: UIRequest): Promise<UIDesign | Component
 
     case "generate-component":
     case "generate-screen": {
-      const { text: analysis } = await tracedChatCompletion(
-        { model: LLM_MODEL, system: enhancedPrompt, prompt: `Generate ${request.action === "generate-component" ? "a component" : "a screen"} for ${platform}.${contextPrompt}` },
+      const { text: analysis } = await tracedGenerateText(
+        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `Generate ${request.action === "generate-component" ? "a component" : "a screen"} for ${platform}.${contextPrompt}`, tools, maxSteps: 3 },
         eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
       );
 
-      const { object } = await chatCompletionWithSchema({
-        model: LLM_MODEL,
+      const { object } = await generateObject({
+        model: llm(LLM_MODEL),
         schema: ComponentCodeSchema,
         system: enhancedPrompt,
         prompt: `Generate structured component code:\n\n${analysis}`,
@@ -634,13 +638,13 @@ async function handleUIRequest(request: UIRequest): Promise<UIDesign | Component
     }
 
     case "review-ui": {
-      const { text: analysis } = await tracedChatCompletion(
-        { model: LLM_MODEL, system: enhancedPrompt, prompt: `Review this UI code for accessibility, performance, and best practices.${contextPrompt}` },
+      const { text: analysis } = await tracedGenerateText(
+        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `Review this UI code for accessibility, performance, and best practices.${contextPrompt}`, tools, maxSteps: 3 },
         eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
       );
 
-      const { object } = await chatCompletionWithSchema({
-        model: LLM_MODEL,
+      const { object } = await generateObject({
+        model: llm(LLM_MODEL),
         schema: UIReviewSchema,
         system: enhancedPrompt,
         prompt: `Create a structured UI review:\n\n${analysis}`,
@@ -650,8 +654,8 @@ async function handleUIRequest(request: UIRequest): Promise<UIDesign | Component
     }
 
     default: {
-      const { text } = await tracedChatCompletion(
-        { model: LLM_MODEL, system: enhancedPrompt, prompt: `${request.action}:${contextPrompt}` },
+      const { text } = await tracedGenerateText(
+        { model: llm(LLM_MODEL), system: enhancedPrompt, prompt: `${request.action}:${contextPrompt}`, tools, maxSteps: 3 },
         eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
       );
       result = text;

@@ -61,7 +61,6 @@ export async function listCredentials(
 export async function downloadAndExtract(
   key: string,
   targetDir: string,
-  bucket?: string,
 ): Promise<void> {
   const client = getClient();
 
@@ -72,7 +71,7 @@ export async function downloadAndExtract(
 
   const response = await client.send(
     new GetObjectCommand({
-      Bucket: bucket || MINIO_BUCKET,
+      Bucket: MINIO_BUCKET,
       Key: key,
     }),
   );
