@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-25: PM Enhancements — Retry Budget, Parallel Workflows, PM Autonomy
+
+Three enhancements to the project-manager: DB-backed retry budgets replace hardcoded cycle limits, in-memory Maps replaced with PostgreSQL lookups to support concurrent workflows, and a two-agent auto-resolve cascade for blocked questions.
+
+#### Core Library
+- **@mesh-six/core@0.7.1**: Add `TokenBucket` rate limiter for GitHub API calls
+  - New `TokenBucket` class with configurable `maxTokens` and `refillRate`
+  - Applied to all `GitHubProjectClient` API methods (50 burst, 80/min refill → ~4800/hr safely under 5000/hr limit)
+  - New `TokenBucketConfig` type export
+
+#### Project Manager
+- **@mesh-six/project-manager@0.4.0**: Retry budget, auto-resolve, concurrent workflow support
+  - **Retry budget**: `planCyclesUsed`/`qaCyclesUsed`/`retryBudget`/`failureHistory` columns in `pm_workflow_instances` — configurable per-issue via `retryBudget` workflow input, failure reasons tracked as JSONB array
+  - **Auto-resolve**: Two-agent cascade for blocked questions — extract question via LLM, classify type (architectural/technical-research/credential-access/ambiguous), consult architect then researcher if needed, evaluate confidence, post answer or escalate via ntfy with best-guess
+  - **In-memory Map removal**: Deleted `projectWorkflowMap` and `projects` Maps, replaced with `lookupByIssue()` and new `lookupByWorkflowId()` PostgreSQL helpers — prerequisite for concurrent workflows
+  - **Poll jitter**: 0-5s random jitter on `pollGithubForCompletion` sleep intervals to prevent synchronized polling from concurrent workflows
+  - New activity types: `LoadRetryBudgetInput/Output`, `IncrementRetryCycleInput`, `AttemptAutoResolveInput/Output`
+
+#### Database Migrations
+- `008_pm_retry_budget.sql`: Add `plan_cycles_used`, `qa_cycles_used`, `retry_budget`, `failure_history` columns to `pm_workflow_instances`
+
 ### Added - 2026-02-25: GWA Migration — Auth Service, Implementer Agent, Credential Management
 
 Merge github-workflow-agents (GWA) credential management, dialog handling, and implementation agent into mesh-six. Auth-service replaces GWA orchestrator for credential lifecycle. LLM service drops GWA dependency. Implementer agent runs Claude CLI in tmux for autonomous code implementation.

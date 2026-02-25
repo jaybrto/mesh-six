@@ -39,9 +39,10 @@ Failure paths (loop back):
 
 ## Key Files
 
-- `apps/project-manager/src/index.ts` — Hono server, Dapr pub/sub handlers, MQTT publishing
-- `apps/project-manager/src/workflow.ts` — Dapr Workflow definition, state transitions
+- `apps/project-manager/src/index.ts` — Hono server, Dapr pub/sub handlers, MQTT publishing, activity implementations (retry budget DB ops, auto-resolve cascade, workflow state lookups via PostgreSQL)
+- `apps/project-manager/src/workflow.ts` — Dapr Workflow definition, state transitions, retry budget loops, auto-resolve blocked handling
 - `packages/core/src/context.ts` — `buildAgentContext()` and `transitionClose()` used by PM
+- `packages/core/src/github.ts` — `GitHubProjectClient` with `TokenBucket` rate limiter
 
 ## Context Management Pattern
 

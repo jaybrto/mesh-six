@@ -846,6 +846,6 @@ Phase 4 (Optional, separate):
 
 - **GWA event bridge** (`apps/gwa-bridge/`): Direct AMQP subscription to `gwa.events.*` for real-time observability. Useful for dashboard and faster phase detection, but not required for the core pipeline.
 - **Gitea support**: Add Gitea API client alongside GitHub. Query `repo_registry` for platform.
-- **Parallel workflows**: Multiple issues progressing simultaneously (already supported by Dapr Workflow instances, but needs testing with concurrent GWA pods).
-- **PM autonomy**: PM attempts to answer blocked questions using architect/researcher agents before relaying to Jay.
-- **Retry budget**: Per-issue retry budget tracked in `pm_workflow_instances` instead of hardcoded `max 3 cycles`.
+- ~~**Parallel workflows**: Multiple issues progressing simultaneously~~ — **Implemented** in `@mesh-six/project-manager@0.4.0`. Removed in-memory Maps, all state via PostgreSQL, poll jitter prevents synchronized API calls.
+- ~~**PM autonomy**: PM attempts to answer blocked questions using architect/researcher agents before relaying to Jay~~ — **Implemented** in `@mesh-six/project-manager@0.4.0`. Two-agent cascade (architect → researcher) with LLM confidence evaluation.
+- ~~**Retry budget**: Per-issue retry budget tracked in `pm_workflow_instances` instead of hardcoded `max 3 cycles`~~ — **Implemented** in `@mesh-six/project-manager@0.4.0`. DB columns + JSONB failure history, configurable via workflow input.

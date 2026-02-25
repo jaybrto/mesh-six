@@ -26,12 +26,16 @@ You develop and maintain the `@mesh-six/core` shared package that every agent in
 
 ```
 packages/core/src/
-├── index.ts      # Public exports (re-exports everything)
-├── types.ts      # Zod schemas: AgentRegistration, TaskRequest, TaskResult, AgentCapability, etc.
-├── registry.ts   # AgentRegistry — agent discovery via Dapr state store (Redis)
-├── scoring.ts    # AgentScorer — weighted routing + rolling success rate (PostgreSQL)
-├── memory.ts     # AgentMemory — Mem0 client wrapper (mem0ai + pgvector + Ollama)
-└── context.ts    # buildAgentContext() + transitionClose() — context builder + reflect-before-reset
+├── index.ts           # Public exports (re-exports everything)
+├── types.ts           # Zod schemas: AgentRegistration, TaskRequest, TaskResult, AgentCapability, etc.
+├── registry.ts        # AgentRegistry — agent discovery via Dapr state store (Redis)
+├── scoring.ts         # AgentScorer — weighted routing + rolling success rate (PostgreSQL)
+├── memory.ts          # AgentMemory — Mem0 client wrapper (mem0ai + pgvector + Ollama)
+├── context.ts         # buildAgentContext() + transitionClose() — context builder + reflect-before-reset
+├── llm.ts             # tracedChatCompletion, chatCompletionWithSchema — LiteLLM OpenAI-compatible
+├── github.ts          # GitHubProjectClient + TokenBucket rate limiter — GitHub Projects GraphQL
+├── credentials.ts     # Credential utilities — isCredentialExpired, buildCredentialsJson, etc.
+└── dialog-handler.ts  # matchKnownDialog, parseDialogResponse — Claude CLI dialog detection
 ```
 
 ## Key Interfaces (from types.ts)
@@ -47,7 +51,7 @@ packages/core/src/
 - `pg` — PostgreSQL client (PgBouncer compatible)
 - `mem0ai` — Memory layer (OSS)
 - `zod` — Schema validation
-- `ai` / `@ai-sdk/openai` — LLM calls (for context.ts reflection)
+- LLM calls via `llm.ts` module (LiteLLM gateway, OpenAI-compatible API)
 
 ## Rules
 
