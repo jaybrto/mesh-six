@@ -2467,3 +2467,373 @@ Phase 4 (Workflow):
 | Agent H (after G) | `apps/llm-service/**` | 2 |
 | Agent I (after F) | `apps/implementer/**`, `docker/Dockerfile.implementer` | 3 |
 | Agent J (after H, I) | `apps/pr-agent/**`, `apps/project-manager/**`, `apps/webhook-receiver/**`, `apps/dashboard/**` | 4 |
+
+---
+
+## Agent Teams Execution Plan
+
+> **For Claude:** Follow these instructions to execute this plan using Claude Code Agent Teams.
+> Load `superpowers:executing-plans` first, then follow the session setup below.
+
+### Team Structure
+
+- **Lead** — Coordinates phases, delegates foundation to subagents, spawns teammates, runs integration
+- **Teammate A: auth-service** — Builds the entire auth-service app + push-credentials CLI
+- **Teammate B: llm-migration** — Migrates llm-service from GWA client to auth-service client
+- **Teammate C: implementer** — Builds the implementer agent, session tables, Dockerfile
+- **Teammate D: infra** — K8s manifests for all new services, CI pipeline updates, deployment.yaml changes
+
+### Phase 1: Foundation (Sequential — Lead Delegates to Subagents)
+
+The lead delegates each foundation task to a synchronous subagent (context preservation). The lead sees only summaries, not file contents.
+
+**Task 1.1: Database migration** (subagent)
+- Create: `migrations/006_auth_tables.sql`
+- Content: auth_projects, auth_credentials, auth_bundles tables (exact SQL in Task 1 above)
+- Verify: File exists and is valid SQL
+
+**Task 1.2: Core auth types** (subagent)
+- Modify: `packages/core/src/types.ts` — append ProjectConfigSchema, CredentialPushRequestSchema, ProjectCredentialSchema, ProvisionRequestSchema, ProvisionResponseSchema, CredentialHealthSchema, ImplementationSessionSchema, SessionQuestionSchema, and constants (AUTH_SERVICE_APP_ID, CREDENTIAL_REFRESHED_TOPIC, CONFIG_UPDATED_TOPIC, SESSION_BLOCKED_TOPIC)
+- Create: `packages/core/src/types.test.ts` — add validation tests for all new schemas
+- Reference: Task 2 above has exact code
+
+**Task 1.3: Core credentials module** (subagent)
+- Create: `packages/core/src/credentials.ts` — isCredentialExpired, syncEphemeralConfig, buildCredentialsJson, buildConfigJson, buildSettingsJson, buildClaudeJson
+- Create: `packages/core/src/credentials.test.ts`
+- Reference: Task 3 above has exact code
+
+**Task 1.4: Core dialog handler** (subagent)
+- Create: `packages/core/src/dialog-handler.ts` — matchKnownDialog, looksNormal, parseDialogResponse, KNOWN_DIALOGS, DIALOG_ANALYSIS_PROMPT, ClaudeDialogError
+- Create: `packages/core/src/dialog-handler.test.ts`
+- Reference: Task 4 above has exact code
+
+**Task 1.5: Core claude.ts enhancements** (subagent)
+- Modify: `packages/core/src/claude.ts` — merge GWA's 15 AUTH_FAILURE_PATTERNS
+- Modify or create: `packages/core/src/claude.test.ts`
+- Reference: Task 5 above has exact patterns
+
+**Task 1.6: Core index.ts exports** (subagent, after 1.2-1.5 complete)
+- Modify: `packages/core/src/index.ts` — add exports for credentials, dialog-handler, and new types
+- Reference: Task 6 above has exact export statements
+
+**Foundation Gate:**
+```bash
+bun run --filter @mesh-six/core typecheck && bun run --filter @mesh-six/core test
+```
+Both must pass before spawning Phase 2 teammates.
+
+### Phase 2: Parallel Implementation (4 Teammates)
+
+#### Teammate A: auth-service
+
+**Exclusively Owns:**
+- `apps/auth-service/package.json`
+- `apps/auth-service/tsconfig.json`
+- `apps/auth-service/src/index.ts`
+- `apps/auth-service/src/config.ts`
+- `apps/auth-service/src/db.ts`
+- `apps/auth-service/src/routes/projects.ts`
+- `apps/auth-service/src/routes/projects.test.ts`
+- `apps/auth-service/src/routes/credentials.ts`
+- `apps/auth-service/src/routes/credentials.test.ts`
+- `apps/auth-service/src/routes/provision.ts`
+- `apps/auth-service/src/routes/provision.test.ts`
+- `apps/auth-service/src/bundle.ts`
+- `apps/auth-service/src/bundle.test.ts`
+- `apps/auth-service/src/refresh-timer.ts`
+- `scripts/push-credentials.ts`
+
+**Reads (no writes):**
+- `packages/core/src/*` — imports types, credential utilities
+- `apps/simple-agent/src/index.ts` — reference agent pattern
+- `apps/llm-service/src/config.ts` — reference config pattern
+- GWA source: `/Users/jay.barreto/dev/util/bto/github-workflow-agents/src/orchestrator/environment-provisioner.ts`
+- GWA source: `/Users/jay.barreto/dev/util/bto/github-workflow-agents/src/push-credentials.ts`
+- GWA source: `/Users/jay.barreto/dev/util/bto/github-workflow-agents/src/shared/types.ts`
+
+**Tasks (plan Tasks 7-12, 14):**
+1. Scaffold app: package.json, tsconfig.json, config.ts, db.ts, minimal index.ts with /healthz and /readyz
+2. Project CRUD routes (POST /, GET /:id, PUT /:id) with tests
+3. Credential routes (POST /:id/credentials, GET /:id/health, POST /:id/refresh) with tests
+4. Provisioning route (POST /:id/provision) + bundle.ts for tar.gz generation with tests
+5. OAuth refresh timer (refresh-timer.ts)
+6. Dapr pub/sub event publishing (credential-refreshed, config-updated topics)
+7. Wire all routes into index.ts, add /dapr/subscribe endpoint
+8. Port push-credentials.ts CLI script (adapted env var names: AUTH_SERVICE_URL, AUTH_PROJECT_ID, AUTH_API_KEY)
+
+**Validation:**
+```bash
+bun install && bun run --filter @mesh-six/auth-service typecheck
+```
+
+**subagent_type:** `bun-service`
+
+---
+
+#### Teammate B: llm-migration
+
+**Exclusively Owns:**
+- `apps/llm-service/src/auth-client.ts`
+- `apps/llm-service/src/auth-client.test.ts`
+- `apps/llm-service/src/claude-cli-actor.ts` (modify)
+- `apps/llm-service/src/config.ts` (modify)
+- `apps/llm-service/src/gwa-client.ts` (delete)
+- `apps/llm-service/src/index.ts` (modify — add subscription)
+
+**Reads (no writes):**
+- `packages/core/src/*` — imports AUTH_SERVICE_APP_ID, CREDENTIAL_REFRESHED_TOPIC, dialog handler
+- GWA source: `/Users/jay.barreto/dev/util/bto/github-workflow-agents/src/lib/credentials-manager.ts`
+- GWA source: `/Users/jay.barreto/dev/util/bto/github-workflow-agents/src/orchestrator/rest-api.ts`
+
+**Tasks (plan Tasks 16-20):**
+1. Create auth-client.ts — provisionFromAuthService(), downloadBundle(), checkAuthServiceHealth() via Dapr service invocation to auth-service
+2. Update claude-cli-actor.ts — replace all gwa-client imports with auth-client imports, rename provisionFromGWAOrchestrator to provisionFromAuth, update onActivate/syncCredentials
+3. Add credential-refreshed subscription to index.ts (/dapr/subscribe + /events/credential-refreshed handler)
+4. Integrate dialog handler from @mesh-six/core into CLI spawner (import matchKnownDialog, looksNormal from core)
+5. Update config.ts — remove GWA_ORCHESTRATOR_URL, GWA_API_KEY, GWA_PROJECT_ID; add AUTH_PROJECT_ID
+6. Delete gwa-client.ts
+7. Verify no remaining GWA references: `grep -r "GWA\|gwa-client\|gwa_client" apps/llm-service/src/`
+
+**Validation:**
+```bash
+bun run --filter @mesh-six/llm-service typecheck
+```
+
+**subagent_type:** `bun-service`
+
+---
+
+#### Teammate C: implementer
+
+**Exclusively Owns:**
+- `migrations/007_session_tables.sql`
+- `apps/implementer/package.json`
+- `apps/implementer/tsconfig.json`
+- `apps/implementer/src/index.ts`
+- `apps/implementer/src/config.ts`
+- `apps/implementer/src/actor.ts`
+- `apps/implementer/src/tmux.ts`
+- `apps/implementer/src/monitor.ts`
+- `apps/implementer/src/session-db.ts`
+- `docker/Dockerfile.implementer`
+
+**Reads (no writes):**
+- `packages/core/src/*` — imports types, registry, credentials, dialog-handler
+- `apps/simple-agent/src/index.ts` — reference agent pattern
+- `apps/llm-service/src/claude-cli-actor.ts` — reference Dapr actor pattern
+- `docker/Dockerfile.agent` — base Dockerfile pattern
+- GWA source: `/Users/jay.barreto/dev/util/bto/github-workflow-agents/src/lib/credentials-manager.ts`
+- GWA source: `/Users/jay.barreto/dev/util/bto/github-workflow-agents/src/lib/dialog-handler.ts`
+- GWA source: `/Users/jay.barreto/dev/util/bto/github-workflow-agents/k8s/gwa-runner-statefulset.yaml`
+
+**Tasks (plan Tasks 22-27):**
+1. Write session tables migration (007_session_tables.sql) — implementation_sessions, session_prompts, session_tool_calls, session_activity_log, session_questions with indexes
+2. Scaffold app: package.json, tsconfig.json, config.ts, index.ts with /healthz, /readyz, /dapr/subscribe, /tasks endpoints. Register capabilities: implementation (1.0), bug-fix-implementation (0.9)
+3. Implement Dapr actor runtime (actor.ts) — ImplementerActor with onActivate (provision from auth-service, clone repo, create worktree), startSession, getStatus, onDeactivate
+4. Implement tmux.ts — createSession, sendCommand, capturePane, killSession, sendKeys using Bun.spawn
+5. Implement session-db.ts — CRUD for session tables (insert session, update status, insert prompt/tool_call/activity/question)
+6. Implement monitor.ts — periodic pane capture, auth failure detection, question detection, completion detection, MQTT event publishing, session DB writes
+7. Create Dockerfile.implementer — based on Dockerfile.agent, adds tmux + git + Claude CLI
+
+**Validation:**
+```bash
+bun install && bun run --filter @mesh-six/implementer typecheck
+```
+
+**subagent_type:** `bun-service`
+
+---
+
+#### Teammate D: infra
+
+**Exclusively Owns:**
+- `k8s/base/auth-service/deployment.yaml`
+- `k8s/base/auth-service/service.yaml`
+- `k8s/base/auth-service/kustomization.yaml`
+- `k8s/base/implementer/statefulset.yaml`
+- `k8s/base/implementer/service.yaml`
+- `k8s/base/implementer/kustomization.yaml`
+- `k8s/base/kustomization.yaml` (modify)
+- `k8s/base/llm-service/deployment.yaml` (modify)
+- `.github/workflows/build-deploy.yaml` (modify)
+
+**Reads (no writes):**
+- `k8s/base/llm-service/*` — reference deployment pattern
+- `k8s/base/webhook-receiver/*` — reference Dapr service pattern
+- `docker/Dockerfile.agent` — verify build arg pattern
+- GWA source: `/Users/jay.barreto/dev/util/bto/github-workflow-agents/k8s/gwa-runner-statefulset.yaml` — reference StatefulSet pattern
+
+**Tasks (plan Tasks 13, 15, 21, 28, 29):**
+1. Create k8s/base/auth-service/ — deployment.yaml (Dapr sidecar, PG env vars from mesh-six-secrets, 128Mi/256Mi resources), service.yaml (ClusterIP 80→3000), kustomization.yaml
+2. Create k8s/base/implementer/ — statefulset.yaml (Dapr sidecar, PVCs: claude-session 10Gi + worktrees 30Gi on longhorn-claude, AUTH_PROJECT_ID env var, PG connection), service.yaml, kustomization.yaml
+3. Modify k8s/base/kustomization.yaml — add `- auth-service` and `- implementer` to resources list
+4. Modify k8s/base/llm-service/deployment.yaml — remove GWA_ORCHESTRATOR_URL, GWA_API_KEY, GWA_PROJECT_ID env vars; add AUTH_PROJECT_ID: "mesh-six"
+5. Modify .github/workflows/build-deploy.yaml — add `auth-service` and `implementer` to all_buildable_agents list; map implementer to docker/Dockerfile.implementer in the dockerfile selection matrix
+
+**Validation:**
+```bash
+kubectl kustomize k8s/base/ > /dev/null && echo "kustomize valid"
+```
+
+**subagent_type:** `k8s`
+
+### Phase 3: Integration + Verification (Lead Delegates to Subagent)
+
+After all 4 teammates complete, spawn a fresh integration subagent:
+
+**Integration subagent prompt:**
+```
+Read all files created/modified by the teammates:
+- apps/auth-service/src/**
+- apps/llm-service/src/auth-client.ts, claude-cli-actor.ts, config.ts, index.ts
+- apps/implementer/src/**
+- docker/Dockerfile.implementer
+- k8s/base/auth-service/**, k8s/base/implementer/**, k8s/base/kustomization.yaml
+- k8s/base/llm-service/deployment.yaml
+- .github/workflows/build-deploy.yaml
+- migrations/007_session_tables.sql
+- scripts/push-credentials.ts
+
+Also read the shared foundation files:
+- packages/core/src/types.ts, credentials.ts, dialog-handler.ts, claude.ts, index.ts
+
+Fix all integration mismatches:
+- Import paths that don't resolve
+- Type names that don't match between modules
+- Missing exports from core index.ts
+- package.json workspace references
+
+Then run:
+1. bun install
+2. bun run typecheck (all packages)
+3. bun run --filter @mesh-six/core test
+4. bun run --filter @mesh-six/auth-service typecheck
+
+Return a summary of all changes made and verification results.
+```
+
+**subagent_type:** `general-purpose`
+
+**After integration subagent returns:**
+- Lead runs verification independently: `bun run typecheck && bun run --filter @mesh-six/core test`
+- Lead commits all Phase 1-3 work
+- Lead updates CHANGELOG.md, bumps version in relevant package.json files
+
+### Phase 4: Workflow (Deferred to Separate Session)
+
+Tasks 30-35 (pr-agent, PM workflow enhancements, webhook-receiver PR events, dashboard session views, E2E validation) depend on the full Phase 1-3 stack being deployed and testable. These should be executed in a separate session after Phase 3 is verified and deployed.
+
+Use `/handoff` to create a handoff document after Phase 3 commits.
+
+### File Ownership Matrix (No Conflicts)
+
+| Teammate | Exclusively Owns | Reads (shared, no writes) |
+|----------|-----------------|--------------------------|
+| **Lead** | `migrations/006_auth_tables.sql`, `packages/core/src/types.ts`, `packages/core/src/types.test.ts`, `packages/core/src/credentials.ts`, `packages/core/src/credentials.test.ts`, `packages/core/src/dialog-handler.ts`, `packages/core/src/dialog-handler.test.ts`, `packages/core/src/claude.ts`, `packages/core/src/claude.test.ts`, `packages/core/src/index.ts` | Everything |
+| **A: auth-service** | `apps/auth-service/**`, `scripts/push-credentials.ts` | `packages/core/src/*`, `apps/simple-agent/src/index.ts`, GWA source |
+| **B: llm-migration** | `apps/llm-service/src/auth-client.ts`, `apps/llm-service/src/auth-client.test.ts`, `apps/llm-service/src/claude-cli-actor.ts`, `apps/llm-service/src/config.ts`, `apps/llm-service/src/gwa-client.ts` (delete), `apps/llm-service/src/index.ts` | `packages/core/src/*`, GWA source |
+| **C: implementer** | `migrations/007_session_tables.sql`, `apps/implementer/**`, `docker/Dockerfile.implementer` | `packages/core/src/*`, `apps/simple-agent/src/index.ts`, `docker/Dockerfile.agent`, GWA source |
+| **D: infra** | `k8s/base/auth-service/**`, `k8s/base/implementer/**`, `k8s/base/kustomization.yaml`, `k8s/base/llm-service/deployment.yaml`, `.github/workflows/build-deploy.yaml` | `k8s/base/llm-service/*`, `k8s/base/webhook-receiver/*`, GWA source |
+
+### Task Dependency DAG
+
+```
+Phase 1 (Lead — subagent delegated):
+  1.1 Migration ───────┐
+  1.2 Core types ──────┤
+  1.3 Credentials ─────┼── 1.6 Core exports ──► Foundation Gate
+  1.4 Dialog handler ──┤     (typecheck + test)
+  1.5 Claude.ts ───────┘
+
+Phase 2 (Parallel Teammates):
+  A: auth-service ─────┐
+  B: llm-migration ────┼── All must complete before Phase 3
+  C: implementer ──────┤
+  D: infra ────────────┘
+
+Phase 3 (Lead — integration subagent):
+  3.1 Integration fixes ──► 3.2 Full typecheck ──► 3.3 Tests ──► 3.4 Commit
+
+Phase 4 (Separate session):
+  4.1 PR agent ──► 4.2 PM workflow ──► 4.3 Webhook PR events ──► 4.4 Dashboard ──► 4.5 E2E
+```
+
+### Claude Code Session Setup
+
+**Prerequisites:**
+```json
+// ~/.claude/settings.json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}
+```
+
+**Execution steps:**
+
+1. Start Claude Code in `/Users/jay.barreto/dev/util/bto/mesh-six`
+2. Tell Claude: `Execute docs/plans/2026-02-25-gwa-migration-plan.md following the Agent Teams Execution Plan section`
+3. Claude loads `superpowers:executing-plans` skill
+4. Claude creates feature branch: `git checkout -b feat/gwa-migration`
+5. Claude creates the full task list with dependencies:
+   - Tasks 1-6: Phase 1 foundation (1.6 blocked by 1.2-1.5)
+   - Task 7: Foundation gate (blocked by 1.1-1.6)
+   - Tasks 8-11: Phase 2 teammates (each blocked by Task 7)
+   - Task 12: Phase 3 integration (blocked by Tasks 8-11)
+6. Claude delegates Phase 1 tasks to synchronous subagents (one per task, lead sees summaries)
+7. Claude runs foundation gate: `bun run --filter @mesh-six/core typecheck && bun run --filter @mesh-six/core test`
+8. Claude calls `TeamCreate` with team name `gwa-migration`
+9. Claude spawns 4 teammates via `Task` tool:
+   - `name: "auth-service"`, `subagent_type: "bun-service"`, `team_name: "gwa-migration"`, `run_in_background: true`
+   - `name: "llm-migration"`, `subagent_type: "bun-service"`, `team_name: "gwa-migration"`, `run_in_background: true`
+   - `name: "implementer"`, `subagent_type: "bun-service"`, `team_name: "gwa-migration"`, `run_in_background: true`
+   - `name: "infra"`, `subagent_type: "k8s"`, `team_name: "gwa-migration"`, `run_in_background: true`
+10. Claude monitors via `TaskList` polling (30s intervals)
+11. When all teammates complete, Claude sends `SendMessage(type="shutdown_request")` to each
+12. Claude spawns integration subagent (Phase 3 prompt above)
+13. Claude runs `superpowers:verification-before-completion`
+14. Claude commits, updates docs
+15. Claude uses `superpowers:finishing-a-development-branch`
+
+### Teammate Prompt Template
+
+Each teammate receives this structure:
+
+```
+You are Teammate [name] on team gwa-migration. Your job is to [description].
+
+**Task Management:**
+- Use `TaskList` to see available tasks
+- Use `TaskUpdate` to claim your task (set owner to your name)
+- Use `TaskGet` to read the full task description
+
+**File Ownership:**
+- You EXCLUSIVELY own: [file list]
+- You may READ (but NOT modify): [shared file list]
+- Do NOT touch any other files
+
+**Context — read these first:**
+- [list of reference files to read for patterns]
+
+**Available imports from @mesh-six/core:**
+- Types: ProjectConfigSchema, CredentialPushRequestSchema, ProjectCredentialSchema, ProvisionRequestSchema, ProvisionResponseSchema, CredentialHealthSchema, ImplementationSessionSchema, SessionQuestionSchema, AUTH_SERVICE_APP_ID, CREDENTIAL_REFRESHED_TOPIC, CONFIG_UPDATED_TOPIC, SESSION_BLOCKED_TOPIC
+- Credentials: isCredentialExpired, syncEphemeralConfig, buildCredentialsJson, buildConfigJson, buildSettingsJson, buildClaudeJson
+- Dialog: matchKnownDialog, parseDialogResponse, looksNormal, KNOWN_DIALOGS, DIALOG_ANALYSIS_PROMPT, ClaudeDialogError
+- Auth: preloadClaudeConfig, detectAuthFailure, checkAuthEnvironment, ClaudeAuthError
+- Constants: DAPR_PUBSUB_NAME, DAPR_STATE_STORE, TASK_RESULTS_TOPIC
+
+**GWA Source Reference:**
+- Read files from /Users/jay.barreto/dev/util/bto/github-workflow-agents/src/ for porting reference
+- [specific files relevant to this teammate]
+
+**Implementation details:**
+[task-specific instructions from the Phase 2 teammate section above]
+
+**Validation:**
+- Run [typecheck/test command] before marking complete
+
+**When complete:**
+- Mark your task as completed via `TaskUpdate`
+- Send completion report via `SendMessage` to team lead
+```
