@@ -1,9 +1,17 @@
-import { chatCompletion } from "@mesh-six/core";
+import { createOpenAI } from "@ai-sdk/openai";
+import { generateText } from "ai";
 import type { CompressionRequest } from "@mesh-six/core";
 
+const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || "http://litellm.litellm:4000/v1";
+const LITELLM_API_KEY = process.env.LITELLM_API_KEY || "sk-local";
 const COMPRESSION_MODEL = process.env.LITELLM_COMPRESSION_MODEL || "ollama-phi3.5";
 const COMPRESSION_TEMPERATURE = 0.1;
 const COMPRESSION_MAX_TOKENS = 500;
+
+const llm = createOpenAI({
+  baseURL: LITELLM_BASE_URL,
+  apiKey: LITELLM_API_KEY,
+});
 
 /**
  * System prompt for Phi3.5 context compression.
@@ -52,8 +60,8 @@ export async function compressWithLLM(
 
   const userMessage = preformatted ?? formatRequestForLLM(request);
 
-  const { text } = await chatCompletion({
-    model: COMPRESSION_MODEL,
+  const { text } = await generateText({
+    model: llm(COMPRESSION_MODEL),
     system: COMPRESSION_SYSTEM_PROMPT,
     prompt: userMessage,
     temperature: COMPRESSION_TEMPERATURE,

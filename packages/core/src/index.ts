@@ -71,20 +71,11 @@ export {
   type EventQueryOpts,
 } from "./events.js";
 
-// LLM utility (replaces Vercel AI SDK)
+// Traced AI
 export {
-  chatCompletion,
-  chatCompletionWithSchema,
-  tracedChatCompletion,
-  tool,
-  LITELLM_BASE_URL,
-  LITELLM_API_KEY,
-  type ChatCompletionOpts,
-  type ChatCompletionResult,
-  type ChatCompletionWithSchemaOpts,
-  type ChatCompletionWithSchemaResult,
+  tracedGenerateText,
   type TraceContext,
-} from "./llm.js";
+} from "./ai.js";
 
 // Claude Code CLI auth & config
 export {

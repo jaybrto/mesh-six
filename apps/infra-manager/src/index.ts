@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
+import { tool } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { Pool } from "pg";
 import {
@@ -7,9 +9,7 @@ import {
   AgentMemory,
   createAgentMemoryFromEnv,
   EventLog,
-  tracedChatCompletion,
-  chatCompletionWithSchema,
-  tool,
+  tracedGenerateText,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -38,6 +38,10 @@ const CADDY_ADMIN_URL = process.env.CADDY_ADMIN_URL || "http://caddy.caddy:2019"
 const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
 
 // --- LLM Provider ---
+const llm = createOpenAI({
+  baseURL: LITELLM_BASE_URL,
+  apiKey: LITELLM_API_KEY,
+});
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
@@ -416,8 +420,8 @@ async function handleTask(task: TaskRequest): Promise<TaskResult> {
 
   // Generate response with tool use
   const traceId = crypto.randomUUID();
-  const { text } = await tracedChatCompletion(
-    { model: LLM_MODEL, system: systemPrompt, prompt: query },
+  const { text } = await tracedGenerateText(
+    { model: llm(LLM_MODEL), system: systemPrompt, prompt: query, tools, maxSteps: 8 },
     eventLog ? { eventLog, traceId, agentId: AGENT_ID, taskId: task.id } : null
   );
 

@@ -1,7 +1,7 @@
+import { generateText, Output, type LanguageModel } from "ai";
 import { z } from "zod";
 import type { TaskRequest } from "./types.js";
 import type { AgentMemory, MemorySearchResult } from "./memory.js";
-import { chatCompletionWithSchema } from "./llm.js";
 
 // --- Interfaces ---
 
@@ -103,7 +103,7 @@ export async function buildAgentContext(
 export async function transitionClose(
   config: TransitionCloseConfig,
   memory: AgentMemory,
-  model: string
+  llm: LanguageModel
 ): Promise<void> {
   const recentHistory = config.conversationHistory.slice(-6).map((m) => ({
     role: m.role as "user" | "assistant" | "system",
@@ -119,9 +119,9 @@ export async function transitionClose(
     ),
   });
 
-  const result = await chatCompletionWithSchema({
-    model,
-    schema: reflectionSchema,
+  const { output } = await generateText({
+    model: llm,
+    output: Output.object({ schema: reflectionSchema }),
     system: `You are reflecting on a state transition in a project management workflow.
              Transition: ${config.transitionFrom} \u2192 ${config.transitionTo}
              Task ID: ${config.taskId}`,
@@ -131,8 +131,7 @@ export async function transitionClose(
     ],
   });
 
-  const output = result.object;
-  if (!output || output.memories.length === 0) return;
+  if (!output) return;
 
   // Store each reflection with appropriate scoping
   for (const mem of output.memories) {

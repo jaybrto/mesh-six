@@ -72,21 +72,24 @@ a card navigates to the corresponding detail screen.
 └──────────────────────────────────────┘
 ```
 
-### Tablet Layout (landscape, wide screen)
+### Tablet Layout (12.2" Tablet — landscape, 2.5K display)
+
+`NavigationSuiteScaffold` automatically renders a navigation rail on the left.
+`GridCells.Adaptive(minSize = 160.dp)` fills 4-7+ columns on the wide display.
 
 ```
 ┌─────┬────────────────────────────────────────────────────────────┐
 │     │  mesh-six                                          [gear] │
-│ NAV │                                                            │
-│RAIL │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐    │
-│     │  │ Sessions │ │ Agents   │ │ Tasks    │ │ Projects │    │
-│[Ho] │  │    3     │ │   12     │ │   47     │ │    2     │    │
-│[Ag] │  │ active   │ │ online   │ │ in 1h    │ │ active   │    │
-│[Se] │  └──────────┘ └──────────┘ └──────────┘ └──────────┘    │
-│[Ta] │                                                            │
-│[Pr] │  ┌─────────────────────────┐ ┌────────────────────────┐  │
-│[LL] │  │ Active Sessions         │ │ Recent Activity        │  │
-│[Se] │  │ ● sess-abc (opus) 12m   │ │ 12:03 Write file.ts   │  │
+│     │                                                            │
+│ NAV │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ │
+│RAIL │  │Sessions│ │ Agents │ │ Tasks  │ │Projects│ │  LLM   │ │
+│(M3  │  │   3    │ │   12   │ │   47   │ │   2    │ │   4    │ │
+│auto)│  │ active │ │ online │ │ in 1h  │ │ active │ │ actors │ │
+│     │  └────────┘ └────────┘ └────────┘ └────────┘ └────────┘ │
+│ 🏠  │                                                            │
+│ 👥  │  ┌─────────────────────────┐ ┌────────────────────────┐  │
+│ ⚙️  │  │ Active Sessions         │ │ Recent Activity        │  │
+│     │  │ ● sess-abc (opus) 12m   │ │ 12:03 Write file.ts   │  │
 │     │  │ ● sess-def (sonnet) 3m  │ │ 12:02 Bash npm test   │  │
 │     │  │ ● sess-ghi (haiku) 45m  │ │ 12:01 SessionStart    │  │
 │     │  └─────────────────────────┘ └────────────────────────┘  │
@@ -218,8 +221,8 @@ Shows colored bar: green (connected + transport name), yellow (reconnecting), re
 - [ ] Tapping a summary card navigates to the corresponding detail screen
 - [ ] Connection banner reflects current MQTT state and transport
 - [ ] Activity ticker shows last 20 events from all sources
-- [ ] Phone layout uses 2-column grid for cards
-- [ ] Tablet layout uses 4-column grid + side panels
+- [ ] `GridCells.Adaptive(160.dp)` auto-fills 2 columns on phone, 4+ on tablet
+- [ ] `NavigationSuiteScaffold` renders bottom nav (phone) or rail (tablet)
 - [ ] All values update in real-time as MQTT events arrive
 - [ ] Screen handles empty state gracefully (no data yet)
 

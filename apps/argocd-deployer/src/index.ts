@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
+import { generateObject, tool } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { Pool } from "pg";
 import {
@@ -7,9 +9,7 @@ import {
   AgentMemory,
   createAgentMemoryFromEnv,
   EventLog,
-  tracedChatCompletion,
-  chatCompletionWithSchema,
-  tool,
+  tracedGenerateText,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
   type AgentRegistration,
@@ -39,6 +39,10 @@ const ARGOCD_TOKEN = process.env.ARGOCD_TOKEN || "";
 const ARGOCD_INSECURE = process.env.ARGOCD_INSECURE === "true";
 
 // --- LLM Provider ---
+const llm = createOpenAI({
+  baseURL: LITELLM_BASE_URL,
+  apiKey: LITELLM_API_KEY,
+});
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
@@ -754,9 +758,9 @@ async function handleDeployRequest(request: DeployRequest): Promise<DeploymentRe
       }
 
       const traceId = crypto.randomUUID();
-      const { text: analysis } = await tracedChatCompletion(
+      const { text: analysis } = await tracedGenerateText(
         {
-          model: LLM_MODEL,
+          model: llm(LLM_MODEL),
           system: enhancedPrompt,
           prompt: `Plan a deployment for:
 Application: ${request.application || "new-app"}
@@ -764,12 +768,14 @@ Source: ${request.source.repoUrl} / ${request.source.path} @ ${request.source.ta
 Destination: ${request.destination.namespace}
 
 Analyze risks and create a deployment plan.`,
+          tools,
+          maxSteps: 3,
         },
         eventLog ? { eventLog, traceId, agentId: AGENT_ID } : null
       );
 
-      const { object } = await chatCompletionWithSchema({
-        model: LLM_MODEL,
+      const { object } = await generateObject({
+        model: llm(LLM_MODEL),
         schema: DeploymentPlanSchema,
         system: enhancedPrompt,
         prompt: `Create a structured deployment plan:\n\n${analysis}`,

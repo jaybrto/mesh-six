@@ -22,7 +22,7 @@ You build and modify agent microservices for the mesh-six multi-agent mesh. Ever
 - **Shared library**: `@mesh-six/core` (types, registry, scoring, memory)
 - **Messaging**: Dapr pub/sub over RabbitMQ (`agent-pubsub`)
 - **State**: Dapr state store over Redis (`agent-statestore`)
-- **LLM**: `@mesh-six/core` llm module via LiteLLM gateway (OpenAI-compatible at `LITELLM_BASE_URL`)
+- **LLM**: Vercel AI SDK via LiteLLM gateway (OpenAI-compatible at `LITELLM_BASE_URL`)
 - **Validation**: Zod 3.24
 
 ## Agent Service Pattern

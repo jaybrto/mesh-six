@@ -24,18 +24,18 @@ FROM registry.bto.bar/jaybrto/bun:1.2-slim
 
 WORKDIR /app
 
-# Install Claude CLI globally and tar, then fix permissions for bun user
+# Install Claude CLI globally
+# The CLI is an npm package that runs on Node.js/Bun
 RUN bun install -g @anthropic-ai/claude-code && \
-    chmod a+x /root && chmod -R a+rX /root/.bun && \
+    # Install tar for credential archive operations
     apt-get update -qq && apt-get install -y -qq tar && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy installed deps + source
 COPY --from=builder /app .
 
-# Create base directory for actor config dirs and bun user home
-RUN mkdir -p /tmp/llm-service/actors && chown -R bun:bun /tmp/llm-service && \
-    mkdir -p /home/bun && chown -R bun:bun /home/bun
+# Create base directory for actor config dirs
+RUN mkdir -p /tmp/llm-service/actors && chown -R bun:bun /tmp/llm-service
 
 ENV AGENT_ENTRY="apps/llm-service/src/index.ts"
 

@@ -224,9 +224,10 @@ export async function validateCLI(
       return { ok: false, error: "Authentication failed" };
     }
 
-    // Validation only checks authentication. A non-zero exit code with
-    // non-auth content (e.g. JSON init messages, partial responses) means
-    // the CLI started and authenticated — good enough for validation.
+    if (!result.success) {
+      return { ok: false, error: result.content.slice(0, 200) };
+    }
+
     return { ok: true };
   } catch (err) {
     return {
