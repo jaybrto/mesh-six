@@ -1228,3 +1228,240 @@ Run the `update-docs` skill to update CHANGELOG.md, CLAUDE.md, and README.md wit
 ```
 
 Then commit the doc changes.
+
+---
+
+## Agent Teams Execution Plan
+
+This plan is designed for execution using Claude Code Agent Teams. The team lead coordinates two parallel teammates with a shared task list.
+
+### Team Structure
+
+**Team Lead** — Coordinator (delegate mode). Responsibilities:
+- Delegates Phase 1 foundation tasks to synchronous subagents (context preservation)
+- Spawns teammates for Phase 2
+- Monitors progress via TaskList polling
+- Delegates Phase 3 integration to a fresh subagent
+- Reviews results, bumps versions, updates docs
+
+### Phase 1: Foundation (Team Lead Delegates to Subagents)
+
+Foundation tasks define the contracts that teammates depend on. The lead delegates each to a synchronous subagent to preserve context.
+
+**Task 1.1: Database migration**
+- Create `migrations/008_pm_retry_budget.sql` (ALTER TABLE adds 4 columns)
+- Run `bun run db:migrate` to verify
+
+**Task 1.2: All new types + activity stubs in workflow.ts**
+- Add `retryBudget?: number` to `ProjectWorkflowInput`
+- Add `LoadRetryBudgetInput`, `LoadRetryBudgetOutput`, `IncrementRetryCycleInput` types
+- Add `AttemptAutoResolveInput`, `AttemptAutoResolveOutput` types
+- Add activity stubs: `loadRetryBudgetActivity`, `incrementRetryCycleActivity`, `attemptAutoResolveActivity`
+- Add all three to `WorkflowActivityImplementations` interface
+- Wire and register all three in `createWorkflowRuntime`
+
+**Task 1.3: TokenBucket rate limiter in github.ts**
+- Add `TokenBucket` class with `tryConsume()` and `waitForToken()`
+- Add `rateLimiter` field to `GitHubProjectClient`, initialize in constructor
+- Add `await this.rateLimit()` call to each public API method
+- Export `TokenBucket` and `TokenBucketConfig` from `packages/core/src/index.ts`
+- Create `packages/core/src/github-ratelimit.test.ts` (4 tests)
+
+**Verification gate:** `bun run --filter @mesh-six/core typecheck && bun run --filter @mesh-six/project-manager typecheck && bun run --filter @mesh-six/core test`
+
+### Phase 2: Parallel Implementation (2 Teammates)
+
+#### Teammate A: Workflow Body Changes
+
+**Owns:**
+- `apps/project-manager/src/workflow.ts` (body changes only — types/stubs already added in Phase 1)
+- `apps/project-manager/src/__tests__/retry-budget.test.ts` (new file)
+- `apps/project-manager/src/__tests__/auto-resolve.test.ts` (new file)
+
+**Tasks:**
+1. **Retry budget loop changes** — Remove `MAX_PLAN_CYCLES` and `MAX_QA_CYCLES` constants. Before PLANNING loop, add `loadRetryBudgetActivity` call. Change loop conditions from hardcoded `3` to `maxCycles` (from DB). Add `incrementRetryCycleActivity` calls after plan rejection and test failure.
+2. **Poll jitter** — Add 0-5s random jitter to `pollGithubForCompletion` sleep interval.
+3. **Auto-resolve blocked handling** — Replace all 3 blocked handling blocks (PLANNING, IMPLEMENTATION, QA) with the `attemptAutoResolveActivity` cascade: try auto-resolve → if resolved post answer → if not resolved escalate via ntfy with bestGuess.
+4. **Write tests** — `retry-budget.test.ts` (type contracts + pollGithubForCompletion behavior), `auto-resolve.test.ts` (type contracts + classification categories).
+
+**Reads (no writes):** `packages/core/src/*`
+
+**Validation:** `bun run --filter @mesh-six/project-manager typecheck && bun test apps/project-manager/src/__tests__/retry-budget.test.ts && bun test apps/project-manager/src/__tests__/auto-resolve.test.ts`
+
+#### Teammate B: Server Wiring + Map Removal
+
+**Owns:**
+- `apps/project-manager/src/index.ts`
+
+**Tasks:**
+1. **Extend WorkflowInstanceRow** — Add `plan_cycles_used`, `qa_cycles_used`, `retry_budget`, `failure_history` fields to the interface.
+2. **Add lookupByWorkflowId helper** — DB query by workflow_id.
+3. **Wire retry budget activities** — `loadRetryBudget` (SELECT query), `incrementRetryCycle` (UPDATE + JSONB append).
+4. **Wire attemptAutoResolve activity** — Full two-agent cascade implementation with LLM question extraction, classification, agent consultation, and confidence evaluation.
+5. **Remove in-memory Maps** — Delete `projectWorkflowMap` and `projects` Maps. Replace all `.get()` / `.set()` references with DB lookups (9 sites, per Task 6 step 3).
+
+**Reads (no writes):** `packages/core/src/*`, `apps/project-manager/src/workflow.ts` (for activity type signatures)
+
+**Validation:** `bun run --filter @mesh-six/project-manager typecheck`
+
+### Phase 3: Integration + Verification (Subagent-Delegated)
+
+After both teammates complete, spawn a fresh **integration subagent** to:
+
+1. Read all modified files (`workflow.ts`, `index.ts`, `github.ts`, test files)
+2. Verify imports align (workflow.ts exports match index.ts imports)
+3. Verify activity interface implementations match their type signatures
+4. Run `bun run typecheck` (all 22 packages)
+5. Run `bun run --filter @mesh-six/core test` (core tests including github-ratelimit)
+6. Run `bun test apps/project-manager/src/__tests__/` (all PM tests)
+7. Fix any integration mismatches
+8. Return a summary of all changes and verification results
+
+**Lead then:**
+- Review the integration summary
+- Bump `packages/core/package.json` version to `0.7.1`
+- Bump `apps/project-manager/package.json` version to `0.4.0`
+- Run `update-docs` skill for CHANGELOG/CLAUDE.md updates
+- Commit
+
+### File Ownership Matrix (No Conflicts)
+
+| Teammate | Exclusively Owns | Reads (shared, no writes) |
+|----------|-----------------|--------------------------|
+| **Lead (Phase 1)** | `migrations/008_pm_retry_budget.sql`, `packages/core/src/github.ts` (TokenBucket), `packages/core/src/github-ratelimit.test.ts`, `packages/core/src/index.ts` (export), `packages/core/package.json`, `apps/project-manager/package.json`, `CHANGELOG.md` | Everything |
+| **A** | `apps/project-manager/src/workflow.ts` (body), `apps/project-manager/src/__tests__/retry-budget.test.ts`, `apps/project-manager/src/__tests__/auto-resolve.test.ts` | `packages/core/src/*` |
+| **B** | `apps/project-manager/src/index.ts` | `packages/core/src/*`, `apps/project-manager/src/workflow.ts` |
+
+Note: Phase 1 adds types/stubs to `workflow.ts`. In Phase 2, only Teammate A modifies `workflow.ts` (body changes). No conflicts.
+
+### Task Dependency DAG
+
+```
+Phase 1 (Lead → subagents):
+  1.1 Migration ────────┐
+  1.2 Types + stubs ────┼── All must pass typecheck before Phase 2
+  1.3 TokenBucket + test ┘
+
+Phase 2 (Parallel):
+  A: Workflow body + tests ──┐
+                              ├── Both must complete before Phase 3
+  B: Server wiring + Maps ───┘
+
+Phase 3 (Lead → integration subagent):
+  3.1 Integration subagent (read, fix, typecheck, test)
+  3.2 Version bumps + docs
+  3.3 Commit
+```
+
+### Claude Code Session Setup
+
+**Prerequisites:**
+
+Agent Teams must be enabled:
+```json
+// ~/.claude/settings.json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}
+```
+
+**Execution steps:**
+
+1. Start Claude Code in the mesh-six project directory
+2. Tell Claude: `@docs/plans/2026-02-25-pm-enhancements-plan.md follow the Agent Teams Execution Plan`
+3. Claude creates a task list with dependencies:
+   - Tasks 1-3: Phase 1 foundation (sequential)
+   - Task 4: Phase 1 verification gate (blocked by 1-3)
+   - Task 5: Teammate A work (blocked by task 4)
+   - Task 6: Teammate B work (blocked by task 4)
+   - Task 7: Phase 3 integration (blocked by tasks 5-6)
+   - Task 8: Version bumps + docs (blocked by task 7)
+4. Claude delegates Phase 1 tasks to synchronous subagents (leader sees summaries only)
+5. Claude verifies the foundation gate (`bun run --filter @mesh-six/core typecheck && bun run --filter @mesh-six/project-manager typecheck && bun run --filter @mesh-six/core test`)
+6. Claude calls `TeamCreate` to establish a team named `pm-enhancements`
+7. Claude spawns two teammates via `Task` tool (see prompts below)
+8. Claude monitors via `TaskList` polling (30s intervals)
+9. When both teammates complete, Claude sends `shutdown_request` to each
+10. Claude spawns integration subagent (fresh context) to verify and fix
+11. Claude bumps versions, updates docs, commits
+
+### Teammate Prompt: A (Workflow Body Changes)
+
+```
+You are Teammate A on team pm-enhancements. Your job is to modify the PM workflow body in workflow.ts — replacing hardcoded retry constants with DB-backed budget, adding poll jitter, and replacing blocked handling with auto-resolve cascades.
+
+**Task Management:**
+- Use TaskList to see available tasks
+- Use TaskUpdate to claim your task (set owner to "teammate-a")
+- Use TaskGet to read the full task description
+
+**File Ownership:**
+- You EXCLUSIVELY own:
+  - apps/project-manager/src/workflow.ts (body changes only — types/stubs are already added)
+  - apps/project-manager/src/__tests__/retry-budget.test.ts (create new)
+  - apps/project-manager/src/__tests__/auto-resolve.test.ts (create new)
+- You may READ but NOT modify: packages/core/src/*
+
+**Context:**
+- Read apps/project-manager/src/workflow.ts first — Phase 1 already added:
+  - retryBudget?: number on ProjectWorkflowInput
+  - LoadRetryBudgetInput/Output, IncrementRetryCycleInput types
+  - AttemptAutoResolveInput/Output types
+  - Activity stubs for all three
+- The existing MAX_PLAN_CYCLES and MAX_QA_CYCLES constants (line ~402) need to be REMOVED
+- The existing blocked handling blocks (3 locations) need to be REPLACED
+
+**What to implement:**
+1. Before the PLANNING loop, call loadRetryBudgetActivity to get budget from DB
+2. Change PLANNING loop from `while (totalPlanCycles < MAX_PLAN_CYCLES)` to use DB budget
+3. After plan rejection, call incrementRetryCycleActivity
+4. Change QA loop similarly — use DB budget, call incrementRetryCycleActivity after test failure
+5. In pollGithubForCompletion, add 0-5s random jitter to the sleep interval
+6. Replace all 3 blocked handling blocks with: call attemptAutoResolveActivity → if resolved post comment + wait → if not resolved ntfy with bestGuess + wait
+7. Write retry-budget.test.ts testing type contracts and pollGithubForCompletion behavior
+8. Write auto-resolve.test.ts testing type contracts
+
+**Validation:**
+bun run --filter @mesh-six/project-manager typecheck
+bun test apps/project-manager/src/__tests__/retry-budget.test.ts
+bun test apps/project-manager/src/__tests__/auto-resolve.test.ts
+
+**When complete:** Mark your task as completed via TaskUpdate, send completion report via SendMessage.
+```
+
+### Teammate Prompt: B (Server Wiring + Map Removal)
+
+```
+You are Teammate B on team pm-enhancements. Your job is to modify the PM server (index.ts) — wiring new activity implementations, adding the attemptAutoResolve agent cascade, and removing in-memory Maps in favor of DB lookups.
+
+**Task Management:**
+- Use TaskList to see available tasks
+- Use TaskUpdate to claim your task (set owner to "teammate-b")
+- Use TaskGet to read the full task description
+
+**File Ownership:**
+- You EXCLUSIVELY own: apps/project-manager/src/index.ts
+- You may READ but NOT modify: packages/core/src/*, apps/project-manager/src/workflow.ts
+
+**Context:**
+- Read apps/project-manager/src/index.ts — understand existing patterns
+- Read apps/project-manager/src/workflow.ts — understand the activity type signatures added in Phase 1
+- Existing helper functions consultArchitect() and requestResearch() (lines 361-417) are used for the auto-resolve cascade
+- Existing tracedChatCompletion is used for LLM calls
+
+**What to implement:**
+1. Extend WorkflowInstanceRow interface with: plan_cycles_used, qa_cycles_used, retry_budget, failure_history
+2. Add lookupByWorkflowId(workflowId) helper function (DB query)
+3. Wire loadRetryBudget activity: SELECT plan_cycles_used, qa_cycles_used, retry_budget FROM pm_workflow_instances
+4. Wire incrementRetryCycle activity: UPDATE the relevant column + 1, append to failure_history JSONB
+5. Wire attemptAutoResolve activity: extract question from comments (LLM), classify (LLM), call first agent, evaluate confidence (LLM), call second agent if needed, evaluate combined (LLM)
+6. Delete projectWorkflowMap (line 111) and projects Map (line 358)
+7. Replace all Map.get/set references with DB lookups (9 sites — see plan Task 6 Step 3 for exact lines)
+
+**Validation:**
+bun run --filter @mesh-six/project-manager typecheck
+
+**When complete:** Mark your task as completed via TaskUpdate, send completion report via SendMessage.
+```
