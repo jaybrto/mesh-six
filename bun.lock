@@ -55,6 +55,21 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/auth-service": {
+      "name": "@mesh-six/auth-service",
+      "version": "0.1.0",
+      "dependencies": {
+        "@dapr/dapr": "^3.4.0",
+        "@mesh-six/core": "workspace:*",
+        "hono": "^4.7.4",
+        "pg": "^8.13.3",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/pg": "^8.11.11",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/claude-mqtt-bridge": {
       "name": "@mesh-six/claude-mqtt-bridge",
       "version": "0.2.0",
@@ -146,6 +161,21 @@
         "typescript": "^5.7.3",
       },
     },
+    "apps/implementer": {
+      "name": "@mesh-six/implementer",
+      "version": "0.1.0",
+      "dependencies": {
+        "@dapr/dapr": "^3.4.0",
+        "@mesh-six/core": "workspace:*",
+        "hono": "^4.7.4",
+        "pg": "^8.13.3",
+        "zod": "^3.24.2",
+      },
+      "devDependencies": {
+        "@types/pg": "^8.11.11",
+        "typescript": "^5.7.3",
+      },
+    },
     "apps/infra-manager": {
       "name": "@mesh-six/infra-manager",
       "version": "0.1.0",
@@ -176,7 +206,7 @@
     },
     "apps/llm-service": {
       "name": "@mesh-six/llm-service",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@aws-sdk/client-s3": "^3.750.0",
         "@dapr/dapr": "^3.6.1",
@@ -294,7 +324,7 @@
     },
     "packages/core": {
       "name": "@mesh-six/core",
-      "version": "0.6.0",
+      "version": "0.6.2",
       "dependencies": {
         "@dapr/dapr": "^3.6.1",
         "@octokit/graphql": "^8.2.1",
@@ -563,6 +593,8 @@
 
     "@mesh-six/argocd-deployer": ["@mesh-six/argocd-deployer@workspace:apps/argocd-deployer"],
 
+    "@mesh-six/auth-service": ["@mesh-six/auth-service@workspace:apps/auth-service"],
+
     "@mesh-six/claude-mqtt-bridge": ["@mesh-six/claude-mqtt-bridge@workspace:apps/claude-mqtt-bridge"],
 
     "@mesh-six/context-service": ["@mesh-six/context-service@workspace:apps/context-service"],
@@ -576,6 +608,8 @@
     "@mesh-six/event-logger": ["@mesh-six/event-logger@workspace:apps/event-logger"],
 
     "@mesh-six/homelab-monitor": ["@mesh-six/homelab-monitor@workspace:apps/homelab-monitor"],
+
+    "@mesh-six/implementer": ["@mesh-six/implementer@workspace:apps/implementer"],
 
     "@mesh-six/infra-manager": ["@mesh-six/infra-manager@workspace:apps/infra-manager"],
 

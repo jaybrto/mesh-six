@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: implementer
+  namespace: mesh-six
+  labels:
+    app: implementer
+    app.kubernetes.io/part-of: mesh-six
+spec:
+  serviceName: implementer
+  replicas: 1
+  selector:
+    matchLabels:
+      app: implementer
+  template:
+    metadata:
+      labels:
+        app: implementer
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "implementer"
+        dapr.io/app-port: "3000"
+        dapr.io/log-level: "info"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+    spec:
+      securityContext:
+        fsGroup: 1001
+      initContainers:
+        - name: fix-permissions
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              chown -R 1001:1001 /home/bun/.claude
+              chown -R 1001:1001 /worktrees
+          volumeMounts:
+            - name: claude-session
+              mountPath: /home/bun/.claude
+            - name: worktrees
+              mountPath: /worktrees
+      containers:
+        - name: implementer
+          image: registry.bto.bar/jaybrto/mesh-six-implementer:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: APP_PORT
+              value: "3000"
+            - name: AUTH_PROJECT_ID
+              value: "mesh-six"
+            - name: PG_HOST
+              value: "pgsql.k3s.bto.bar"
+            - name: PG_PORT
+              value: "5432"
+            - name: PG_DATABASE
+              value: "mesh_six"
+            - name: PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: PG_USER
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: PG_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          volumeMounts:
+            - name: claude-session
+              mountPath: /home/bun/.claude
+            - name: worktrees
+              mountPath: /worktrees
+  volumeClaimTemplates:
+    - metadata:
+        name: claude-session
+        labels:
+          app: implementer
+          app.kubernetes.io/part-of: mesh-six
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: longhorn-claude
+        resources:
+          requests:
+            storage: 10Gi
+    - metadata:
+        name: worktrees
+        labels:
+          app: implementer
+          app.kubernetes.io/part-of: mesh-six
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: longhorn-claude
+        resources:
+          requests:
+            storage: 30Gi

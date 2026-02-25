@@ -1,0 +1,237 @@
+/**
+ * Session monitor — periodically captures tmux pane output and detects:
+ * - Auth failures → re-provision from auth-service
+ * - Questions → insert into session_questions, publish session-blocked event
+ * - Completion → update session status, publish task result
+ * - MQTT events → real-time dashboard updates
+ */
+import { DaprClient } from "@dapr/dapr";
+import {
+  DAPR_PUBSUB_NAME,
+  TASK_RESULTS_TOPIC,
+  SESSION_BLOCKED_TOPIC,
+  AUTH_SERVICE_APP_ID,
+  detectAuthFailure,
+  type TaskResult,
+} from "@mesh-six/core";
+import { DAPR_HOST, DAPR_HTTP_PORT, AUTH_PROJECT_ID, AGENT_ID } from "./config.js";
+import { capturePane } from "./tmux.js";
+import {
+  updateSessionStatus,
+  insertActivityLog,
+  insertQuestion,
+} from "./session-db.js";
+import type { ActorState } from "./actor.js";
+
+const log = (msg: string) => console.log(`[${AGENT_ID}][monitor] ${msg}`);
+
+const MONITOR_INTERVAL_MS = 5_000;
+
+// Question detection pattern — matches lines ending with "?" that look like
+// Claude asking for clarification.
+const QUESTION_PATTERN = /(?:^|\n)(?:Claude|Assistant)?:?\s*([^.!]+\?\s*)$/im;
+
+// Completion detection — Claude CLI exits and prints a summary line.
+const COMPLETION_PATTERNS = [
+  /Task completed successfully/i,
+  /I've completed the implementation/i,
+  /The implementation is complete/i,
+  /All changes have been made/i,
+  /\$ $/, // Shell prompt returned — process exited
+];
+
+// ---------------------------------------------------------------------------
+// SessionMonitor
+// ---------------------------------------------------------------------------
+
+export interface MonitorContext {
+  sessionId: string;
+  taskId: string;
+  actorState: ActorState;
+  daprClient: DaprClient;
+  onComplete: (result: TaskResult) => void;
+}
+
+export class SessionMonitor {
+  private timer: Timer | null = null;
+  private ctx: MonitorContext;
+  private lastCaptureHash = "";
+  private questionDetected = false;
+
+  constructor(ctx: MonitorContext) {
+    this.ctx = ctx;
+  }
+
+  start(): void {
+    if (this.timer) return;
+    log(`Starting monitor for session ${this.ctx.sessionId}`);
+    this.timer = setInterval(() => {
+      this.tick().catch((err) => {
+        log(`Monitor tick error: ${err}`);
+      });
+    }, MONITOR_INTERVAL_MS);
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+      log(`Stopped monitor for session ${this.ctx.sessionId}`);
+    }
+  }
+
+  private async tick(): Promise<void> {
+    const { actorState, sessionId, taskId, daprClient } = this.ctx;
+    const { tmuxSessionName } = actorState;
+
+    let paneText: string;
+    try {
+      paneText = await capturePane(tmuxSessionName, 100);
+    } catch (err) {
+      // Session may have ended
+      log(`capturePane failed for ${tmuxSessionName}: ${err}`);
+      await this.handleCompletion(false, `tmux session unavailable: ${err}`);
+      return;
+    }
+
+    // Skip if output unchanged
+    const hash = simpleHash(paneText);
+    if (hash === this.lastCaptureHash) return;
+    this.lastCaptureHash = hash;
+
+    // --- Auth failure detection ---
+    if (detectAuthFailure(paneText)) {
+      log(`Auth failure detected in session ${sessionId}, re-provisioning`);
+      await insertActivityLog({
+        sessionId,
+        eventType: "auth_failure_detected",
+        detailsJson: { paneSnippet: paneText.slice(-500) },
+      });
+
+      const ok = await this.reprovisionsCredentials();
+      if (!ok) {
+        await this.handleCompletion(false, "Authentication failed and re-provision failed");
+      }
+      return;
+    }
+
+    // --- Completion detection ---
+    for (const pattern of COMPLETION_PATTERNS) {
+      if (pattern.test(paneText)) {
+        log(`Completion detected in session ${sessionId}`);
+        await this.handleCompletion(true);
+        return;
+      }
+    }
+
+    // --- Question detection ---
+    if (!this.questionDetected) {
+      const questionMatch = QUESTION_PATTERN.exec(paneText);
+      if (questionMatch) {
+        const questionText = questionMatch[1].trim();
+        log(`Question detected in session ${sessionId}: ${questionText}`);
+        this.questionDetected = true;
+
+        await updateSessionStatus(sessionId, "blocked");
+        const question = await insertQuestion({ sessionId, questionText });
+
+        await insertActivityLog({
+          sessionId,
+          eventType: "question_detected",
+          detailsJson: { questionId: question.id, questionText },
+        });
+
+        // Publish session-blocked event via Dapr pub/sub
+        await daprClient.pubsub.publish(DAPR_PUBSUB_NAME, SESSION_BLOCKED_TOPIC, {
+          sessionId,
+          taskId,
+          questionId: question.id,
+          questionText,
+          issueNumber: actorState.issueNumber,
+          repoOwner: actorState.repoOwner,
+          repoName: actorState.repoName,
+          timestamp: new Date().toISOString(),
+        });
+
+        log(`Published session-blocked event for session ${sessionId}`);
+        return;
+      }
+    }
+
+    // Publish MQTT event for dashboard progress
+    await this.publishMqttEvent("session_progress", {
+      sessionId,
+      paneSnippet: paneText.slice(-200),
+    }).catch(() => {});
+  }
+
+  private async handleCompletion(success: boolean, errorMessage?: string): Promise<void> {
+    this.stop();
+
+    const { sessionId, taskId, daprClient } = this.ctx;
+    const completedAt = new Date().toISOString();
+
+    await updateSessionStatus(sessionId, success ? "completed" : "failed", {
+      completedAt,
+    });
+
+    await insertActivityLog({
+      sessionId,
+      eventType: success ? "session_completed" : "session_failed",
+      detailsJson: errorMessage ? { error: errorMessage } : undefined,
+    });
+
+    const result: TaskResult = {
+      taskId,
+      agentId: AGENT_ID,
+      success,
+      result: success ? { sessionId } : undefined,
+      error: success ? undefined : { type: "session_failed", message: errorMessage ?? "Session failed" },
+      durationMs: this.ctx.actorState.startedAt
+        ? Date.now() - new Date(this.ctx.actorState.startedAt).getTime()
+        : 0,
+      completedAt,
+    };
+
+    await daprClient.pubsub.publish(DAPR_PUBSUB_NAME, TASK_RESULTS_TOPIC, result);
+    log(`Published task result for ${taskId}: success=${success}`);
+
+    await this.publishMqttEvent(success ? "session_completed" : "session_failed", {
+      sessionId,
+      taskId,
+    }).catch(() => {});
+
+    this.ctx.onComplete(result);
+  }
+
+  private async reprovisionsCredentials(): Promise<boolean> {
+    try {
+      const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/${AUTH_SERVICE_APP_ID}/method/projects/${AUTH_PROJECT_ID}/provision`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ podName: AGENT_ID }),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  private async publishMqttEvent(event: string, data: Record<string, unknown>): Promise<void> {
+    await this.ctx.daprClient.pubsub.publish(DAPR_PUBSUB_NAME, "mqtt-events", {
+      source: AGENT_ID,
+      event,
+      data,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
+function simpleHash(str: string): string {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return h.toString(36);
+}

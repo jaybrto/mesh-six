@@ -9,10 +9,8 @@ export const APP_PORT = Number(process.env.APP_PORT) || 3000;
 export const DAPR_HOST = process.env.DAPR_HOST || "127.0.0.1";
 export const DAPR_HTTP_PORT = Number(process.env.DAPR_HTTP_PORT) || 3500;
 
-// GWA Orchestrator — opt-in credential provisioning via GitHub Workflow Agents
-export const GWA_ORCHESTRATOR_URL = process.env.GWA_ORCHESTRATOR_URL || "";
-export const GWA_API_KEY = process.env.GWA_API_KEY || "";
-export const GWA_PROJECT_ID = process.env.GWA_PROJECT_ID || "mesh-six";
+// Auth service — credential provisioning project ID
+export const AUTH_PROJECT_ID = process.env.AUTH_PROJECT_ID || "mesh-six";
 
 // MinIO / S3-compatible storage for credentials and configs
 export const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || "http://minio.minio:9000";

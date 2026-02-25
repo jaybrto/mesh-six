@@ -147,3 +147,121 @@ export const BoardEvent = z.discriminatedUnion("type", [
 ]);
 
 export type BoardEventType = z.infer<typeof BoardEvent>;
+
+// ---------------------------------------------------------------------------
+// Auth service types (ported from GWA)
+// ---------------------------------------------------------------------------
+
+export const ProjectConfigSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  claudeAccountUuid: z.string().optional(),
+  claudeOrgUuid: z.string().optional(),
+  claudeEmail: z.string().optional(),
+  settingsJson: z.string().optional(),
+  claudeJson: z.string().optional(),
+  mcpJson: z.string().optional(),
+  claudeMd: z.string().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
+
+export const CredentialPushRequestSchema = z.object({
+  accessToken: z.string(),
+  refreshToken: z.string().optional(),
+  expiresAt: z.string().datetime(),
+  accountUuid: z.string().optional(),
+  emailAddress: z.string().optional(),
+  organizationUuid: z.string().optional(),
+  billingType: z.string().optional(),
+  displayName: z.string().optional(),
+  scopes: z.array(z.string()).optional(),
+  subscriptionType: z.string().optional(),
+  rateLimitTier: z.string().optional(),
+});
+export type CredentialPushRequest = z.infer<typeof CredentialPushRequestSchema>;
+
+export const ProjectCredentialSchema = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  accessToken: z.string(),
+  refreshToken: z.string().optional(),
+  expiresAt: z.string().datetime(),
+  accountUuid: z.string().optional(),
+  emailAddress: z.string().optional(),
+  organizationUuid: z.string().optional(),
+  billingType: z.string(),
+  displayName: z.string(),
+  scopes: z.array(z.string()).optional(),
+  subscriptionType: z.string().optional(),
+  rateLimitTier: z.string().optional(),
+  source: z.enum(["push", "refresh", "import"]),
+  pushedBy: z.string().optional(),
+  createdAt: z.string().datetime(),
+  invalidatedAt: z.string().datetime().optional(),
+});
+export type ProjectCredential = z.infer<typeof ProjectCredentialSchema>;
+
+export const ProvisionRequestSchema = z.object({
+  podName: z.string(),
+  currentBundleId: z.string().optional(),
+});
+export type ProvisionRequest = z.infer<typeof ProvisionRequestSchema>;
+
+export const ProvisionResponseSchema = z.object({
+  status: z.enum(["current", "provisioned", "no_credentials"]),
+  bundleId: z.string().optional(),
+  credentialExpiresAt: z.string().datetime().optional(),
+  message: z.string().optional(),
+});
+export type ProvisionResponse = z.infer<typeof ProvisionResponseSchema>;
+
+export const CredentialHealthSchema = z.object({
+  projectId: z.string(),
+  hasValidCredential: z.boolean(),
+  expiresAt: z.string().datetime().optional(),
+  expiresInMs: z.number().optional(),
+  hasRefreshToken: z.boolean(),
+  lastRefreshAt: z.string().datetime().optional(),
+  activeBundleId: z.string().optional(),
+});
+export type CredentialHealth = z.infer<typeof CredentialHealthSchema>;
+
+// ---------------------------------------------------------------------------
+// Implementation session types
+// ---------------------------------------------------------------------------
+
+export const ImplementationSessionSchema = z.object({
+  id: z.string(),
+  issueNumber: z.number(),
+  repoOwner: z.string(),
+  repoName: z.string(),
+  status: z.enum(["idle", "running", "blocked", "completed", "failed"]),
+  actorId: z.string().optional(),
+  tmuxWindow: z.number().optional(),
+  credentialBundleId: z.string().optional(),
+  startedAt: z.string().datetime().optional(),
+  completedAt: z.string().datetime().optional(),
+  createdAt: z.string().datetime(),
+});
+export type ImplementationSession = z.infer<typeof ImplementationSessionSchema>;
+
+export const SessionQuestionSchema = z.object({
+  id: z.number(),
+  sessionId: z.string(),
+  questionText: z.string(),
+  answerText: z.string().optional(),
+  askedAt: z.string().datetime(),
+  answeredAt: z.string().datetime().optional(),
+});
+export type SessionQuestion = z.infer<typeof SessionQuestionSchema>;
+
+// ---------------------------------------------------------------------------
+// Auth service constants
+// ---------------------------------------------------------------------------
+
+export const AUTH_SERVICE_APP_ID = "auth-service";
+export const CREDENTIAL_REFRESHED_TOPIC = "credential-refreshed";
+export const CONFIG_UPDATED_TOPIC = "config-updated";
+export const SESSION_BLOCKED_TOPIC = "session-blocked";

@@ -3,6 +3,7 @@ import { ActorRuntime } from "./actor-runtime.js";
 import { ActorRouter } from "./router.js";
 import { createClaudeCLIActor } from "./claude-cli-actor.js";
 import { AGENT_ID, APP_PORT, ACTOR_TYPE, MAX_ACTORS } from "./config.js";
+import { DAPR_PUBSUB_NAME, CREDENTIAL_REFRESHED_TOPIC } from "@mesh-six/core";
 
 const log = (msg: string) => console.log(`[${AGENT_ID}] ${msg}`);
 
@@ -18,6 +19,25 @@ const router = new ActorRouter(runtime);
 
 // Create Hono app
 const app = createApp(runtime, router);
+
+// ============================================================================
+// DAPR PUB/SUB SUBSCRIPTION
+// ============================================================================
+
+app.get("/dapr/subscribe", (c) => {
+  return c.json([
+    {
+      pubsubname: DAPR_PUBSUB_NAME,
+      topic: CREDENTIAL_REFRESHED_TOPIC,
+      route: "/events/credential-refreshed",
+    },
+  ]);
+});
+
+app.post("/events/credential-refreshed", async (c) => {
+  log("[llm-service] Credential refreshed event received");
+  return c.json({ status: "SUCCESS" });
+});
 
 // ============================================================================
 // START SERVER

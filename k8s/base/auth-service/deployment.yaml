@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: mesh-six
+  labels:
+    app: auth-service
+    app.kubernetes.io/part-of: mesh-six
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "auth-service"
+        dapr.io/app-port: "3000"
+        dapr.io/log-level: "info"
+        dapr.io/enable-metrics: "true"
+        dapr.io/metrics-port: "9090"
+    spec:
+      containers:
+        - name: auth-service
+          image: registry.bto.bar/jaybrto/mesh-six-auth-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: APP_PORT
+              value: "3000"
+            - name: PG_HOST
+              value: "pgsql.k3s.bto.bar"
+            - name: PG_PORT
+              value: "5432"
+            - name: PG_DATABASE
+              value: "mesh_six"
+            - name: PG_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: PG_USER
+            - name: PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: PG_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"

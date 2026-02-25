@@ -64,16 +64,7 @@ spec:
                   optional: true
             - name: MINIO_BUCKET
               value: "llm-service"
-            # GWA Orchestrator — opt-in credential provisioning
-            - name: GWA_ORCHESTRATOR_URL
-              value: "http://gwa-orchestrator.gwa:3001"
-            - name: GWA_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: mesh-six-secrets
-                  key: gwa-api-key
-                  optional: true
-            - name: GWA_PROJECT_ID
+            - name: AUTH_PROJECT_ID
               value: "mesh-six"
           readinessProbe:
             httpGet:

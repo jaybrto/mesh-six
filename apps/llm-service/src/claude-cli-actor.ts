@@ -32,7 +32,12 @@ import {
   DEFAULT_MODEL,
   ALLOWED_MODELS,
 } from "./config.js";
-import { isGWAConfigured, provisionFromGWA } from "./gwa-client.js";
+import {
+  isAuthServiceConfigured,
+  provisionFromAuthService,
+  downloadBundle,
+  checkAuthServiceHealth,
+} from "./auth-client.js";
 
 const log = (msg: string) => console.log(`[${AGENT_ID}][actor] ${msg}`);
 
@@ -51,8 +56,8 @@ export class ClaudeCLIActor implements Actor {
   private errorCount = 0;
   private lastUsed: string | undefined;
 
-  // GWA credential provisioning state
-  private gwaBundleId: string | null = null;
+  // Auth service credential provisioning state
+  private authBundleId: string | null = null;
   private credentialExpiresAt: number | null = null;
 
   // Mutable runtime config (updated via Dapr config subscription)
@@ -82,11 +87,11 @@ export class ClaudeCLIActor implements Actor {
       mkdirSync(claudeDir, { recursive: true });
     }
 
-    // Try GWA provisioning first (if configured), then fall back to MinIO
+    // Try auth-service provisioning first (if configured), then fall back to MinIO
     let credentialsLoaded = false;
 
-    if (isGWAConfigured()) {
-      credentialsLoaded = await this.provisionFromGWAOrchestrator();
+    if (isAuthServiceConfigured()) {
+      credentialsLoaded = await this.provisionFromAuth();
     }
 
     if (!credentialsLoaded) {
@@ -126,7 +131,7 @@ export class ClaudeCLIActor implements Actor {
       this.status = "unhealthy";
 
       // Only try next credential if using legacy MinIO mode
-      if (!this.gwaBundleId) {
+      if (!this.authBundleId) {
         await this.tryNextCredential();
       }
       return;
@@ -147,7 +152,7 @@ export class ClaudeCLIActor implements Actor {
     // Save actor state
     await this.persistState();
 
-    const source = this.gwaBundleId ? `GWA bundle ${this.gwaBundleId}` : `credential ${this.credentialKey}`;
+    const source = this.authBundleId ? `auth bundle ${this.authBundleId}` : `credential ${this.credentialKey}`;
     log(`Actor ${this.actorId} ready (${source})`);
   }
 
@@ -260,11 +265,11 @@ export class ClaudeCLIActor implements Actor {
 
       this.requestCount++;
 
-      // Handle auth errors — attempt GWA re-provision before giving up
+      // Handle auth errors — attempt auth-service re-provision before giving up
       if (result.isAuthError) {
-        if (isGWAConfigured()) {
-          log(`Auth error for ${this.actorId}, attempting GWA re-provision`);
-          const reprovisioned = await this.provisionFromGWAOrchestrator();
+        if (isAuthServiceConfigured()) {
+          log(`Auth error for ${this.actorId}, attempting auth-service re-provision`);
+          const reprovisioned = await this.provisionFromAuth();
           if (reprovisioned) {
             result = await spawnCLI(cliOpts);
             this.requestCount++;
@@ -352,16 +357,16 @@ export class ClaudeCLIActor implements Actor {
   // INTERNAL HELPERS
   // -------------------------------------------------------------------------
 
-  /** Sync credentials — refresh via GWA if expiring, always archive back to MinIO */
+  /** Sync credentials — refresh via auth-service if expiring, always archive back to MinIO */
   private async syncCredentials(): Promise<void> {
-    // GWA mode: check expiry and re-provision if needed
-    if (this.gwaBundleId && this.credentialExpiresAt) {
+    // Auth service mode: check expiry and re-provision if needed
+    if (this.authBundleId && this.credentialExpiresAt) {
       const msUntilExpiry = this.credentialExpiresAt - Date.now();
       const REFRESH_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 
       if (msUntilExpiry < REFRESH_THRESHOLD_MS) {
-        log(`Credentials expiring in ${Math.round(msUntilExpiry / 60_000)}m, re-provisioning from GWA`);
-        await this.provisionFromGWAOrchestrator();
+        log(`Credentials expiring in ${Math.round(msUntilExpiry / 60_000)}m, re-provisioning from auth-service`);
+        await this.provisionFromAuth();
       }
     }
 
@@ -376,30 +381,47 @@ export class ClaudeCLIActor implements Actor {
     }
   }
 
-  /** Attempt to provision credentials from the GWA orchestrator */
-  private async provisionFromGWAOrchestrator(): Promise<boolean> {
+  /** Attempt to provision credentials from the auth-service */
+  private async provisionFromAuth(): Promise<boolean> {
     try {
-      const provision = await provisionFromGWA(this.actorId, this.gwaBundleId || undefined);
+      const provision = await provisionFromAuthService(this.actorId, this.authBundleId || undefined);
       if (!provision) return false;
 
-      if (provision.status === "provisioned" && provision.s3Key) {
-        await downloadAndExtract(provision.s3Key, this.configDir, provision.s3Bucket);
-        this.gwaBundleId = provision.bundleId || null;
-        this.credentialExpiresAt = provision.credentialExpiresAt || null;
-        log(`GWA provisioned bundle ${this.gwaBundleId} for ${this.actorId}`);
+      if (provision.status === "provisioned" && provision.bundleId) {
+        const bundle = await downloadBundle(provision.bundleId);
+        if (!bundle) {
+          log(`Failed to download bundle ${provision.bundleId} for ${this.actorId}`);
+          return false;
+        }
+        const proc = Bun.spawn(["tar", "xzf", "-", "-C", this.configDir], {
+          stdin: new Blob([bundle]),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const exitCode = await proc.exited;
+        if (exitCode !== 0) {
+          const stderr = await new Response(proc.stderr).text();
+          log(`Bundle extraction failed for ${this.actorId}: ${stderr}`);
+          return false;
+        }
+        this.authBundleId = provision.bundleId;
+        this.credentialExpiresAt = provision.credentialExpiresAt
+          ? new Date(provision.credentialExpiresAt).getTime()
+          : null;
+        log(`Auth-service provisioned bundle ${this.authBundleId} for ${this.actorId}`);
         return true;
       }
 
       if (provision.status === "current") {
-        log(`GWA credentials still current for ${this.actorId}`);
+        log(`Auth-service credentials still current for ${this.actorId}`);
         return true;
       }
 
       // status === "no_credentials"
-      log(`GWA has no credentials for ${this.actorId}`);
+      log(`Auth-service has no credentials for ${this.actorId}`);
       return false;
     } catch (err) {
-      log(`GWA provision failed for ${this.actorId}: ${err}`);
+      log(`Auth-service provision failed for ${this.actorId}: ${err}`);
       return false;
     }
   }

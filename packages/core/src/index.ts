@@ -21,6 +21,29 @@ export {
   CardMovedEvent,
   BoardEvent,
   type BoardEventType,
+  // Auth service types
+  ProjectConfigSchema,
+  CredentialPushRequestSchema,
+  ProjectCredentialSchema,
+  ProvisionRequestSchema,
+  ProvisionResponseSchema,
+  CredentialHealthSchema,
+  type ProjectConfig,
+  type CredentialPushRequest,
+  type ProjectCredential,
+  type ProvisionRequest,
+  type ProvisionResponse,
+  type CredentialHealth,
+  // Implementation session types
+  ImplementationSessionSchema,
+  SessionQuestionSchema,
+  type ImplementationSession,
+  type SessionQuestion,
+  // Auth service constants
+  AUTH_SERVICE_APP_ID,
+  CREDENTIAL_REFRESHED_TOPIC,
+  CONFIG_UPDATED_TOPIC,
+  SESSION_BLOCKED_TOPIC,
 } from "./types.js";
 
 // Registry
@@ -93,6 +116,27 @@ export {
   checkAuthEnvironment,
   ClaudeAuthError,
 } from "./claude.js";
+
+// Dialog detection for Claude Code CLI
+export {
+  matchKnownDialog,
+  parseDialogResponse,
+  looksNormal,
+  KNOWN_DIALOGS,
+  DIALOG_ANALYSIS_PROMPT,
+  ClaudeDialogError,
+  type DialogResponse,
+} from "./dialog-handler.js";
+
+// Credential utilities (Claude CLI auth file helpers)
+export {
+  isCredentialExpired,
+  syncEphemeralConfig,
+  buildCredentialsJson,
+  buildConfigJson,
+  buildSettingsJson,
+  buildClaudeJson,
+} from "./credentials.js";
 
 // Context compression
 export {

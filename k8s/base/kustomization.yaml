@@ -29,6 +29,8 @@ resources:
   - event-logger/
   - webhook-receiver/
   - llm-service/
+  - auth-service/
+  - implementer/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

@@ -38,11 +38,13 @@ jobs:
             api-coder
             architect-agent
             argocd-deployer
+            auth-service
             claude-mqtt-bridge
             cost-tracker
             dashboard
             event-logger
             homelab-monitor
+            implementer
             infra-manager
             kubectl-deployer
             llm-service
@@ -160,6 +162,8 @@ jobs:
             DOCKERFILE="docker/Dockerfile.dashboard"
           elif [ "${{ matrix.agent }}" = "llm-service" ]; then
             DOCKERFILE="docker/Dockerfile.llm-service"
+          elif [ "${{ matrix.agent }}" = "implementer" ]; then
+            DOCKERFILE="docker/Dockerfile.implementer"
           fi
           DEST="${{ env.REGISTRY }}/${{ env.ORG }}/${{ env.IMAGE_PREFIX }}-${{ matrix.agent }}"
           cat <<EOF | kubectl apply -f -

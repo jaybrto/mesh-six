@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+
+FROM registry.bto.bar/jaybrto/bun:1.2 AS builder
+
+WORKDIR /app
+
+# Copy workspace manifests first (layer cache: reinstall only when deps change)
+COPY package.json bunfig.toml bun.lock* ./
+COPY packages/core/package.json ./packages/core/
+COPY apps/implementer/package.json ./apps/implementer/
+
+RUN bun install
+
+# Copy source
+COPY tsconfig.json ./
+COPY packages/core/ ./packages/core/
+COPY apps/implementer/ ./apps/implementer/
+
+# --- Runtime ---
+FROM registry.bto.bar/jaybrto/bun:1.2-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tmux \
+    git \
+    ca-certificates \
+    curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Claude CLI
+RUN curl -fsSL https://claude.ai/install.sh | sh
+
+# Copy installed deps + source from builder
+COPY --from=builder /app .
+
+# Run as non-root
+USER bun
+
+EXPOSE 3000
+
+CMD ["bun", "run", "apps/implementer/src/index.ts"]

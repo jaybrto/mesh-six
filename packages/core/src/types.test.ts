@@ -6,6 +6,12 @@ import {
   TaskResultSchema,
   AgentScoreCardSchema,
   TaskStatusSchema,
+  ProjectConfigSchema,
+  CredentialPushRequestSchema,
+  ProvisionRequestSchema,
+  ProvisionResponseSchema,
+  CredentialHealthSchema,
+  ImplementationSessionSchema,
 } from "./types.js";
 
 describe("AgentCapabilitySchema", () => {
@@ -304,5 +310,82 @@ describe("TaskStatusSchema", () => {
       },
     });
     expect(result.result?.success).toBe(true);
+  });
+});
+
+describe("Auth types", () => {
+  it("parses valid ProjectConfig", () => {
+    const result = ProjectConfigSchema.parse({
+      id: "mesh-six",
+      displayName: "Mesh Six",
+      createdAt: "2026-02-25T00:00:00Z",
+      updatedAt: "2026-02-25T00:00:00Z",
+    });
+    expect(result.id).toBe("mesh-six");
+  });
+
+  it("rejects ProjectConfig missing required fields", () => {
+    expect(() => ProjectConfigSchema.parse({ id: "x" })).toThrow();
+  });
+
+  it("parses valid CredentialPushRequest", () => {
+    const result = CredentialPushRequestSchema.parse({
+      accessToken: "sk-ant-test",
+      expiresAt: "2026-03-01T00:00:00Z",
+    });
+    expect(result.accessToken).toBe("sk-ant-test");
+  });
+
+  it("rejects CredentialPushRequest without accessToken", () => {
+    expect(() =>
+      CredentialPushRequestSchema.parse({ expiresAt: "2026-03-01T00:00:00Z" })
+    ).toThrow();
+  });
+
+  it("parses ProvisionResponse with all statuses", () => {
+    for (const status of ["current", "provisioned", "no_credentials"] as const) {
+      const result = ProvisionResponseSchema.parse({ status });
+      expect(result.status).toBe(status);
+    }
+  });
+
+  it("rejects ProvisionResponse with invalid status", () => {
+    expect(() =>
+      ProvisionResponseSchema.parse({ status: "invalid" })
+    ).toThrow();
+  });
+
+  it("parses CredentialHealth", () => {
+    const result = CredentialHealthSchema.parse({
+      projectId: "mesh-six",
+      hasValidCredential: true,
+      hasRefreshToken: true,
+    });
+    expect(result.hasValidCredential).toBe(true);
+  });
+
+  it("parses ImplementationSession", () => {
+    const result = ImplementationSessionSchema.parse({
+      id: "sess-1",
+      issueNumber: 42,
+      repoOwner: "jaybrto",
+      repoName: "mesh-six",
+      status: "running",
+      createdAt: "2026-02-25T00:00:00Z",
+    });
+    expect(result.status).toBe("running");
+  });
+
+  it("rejects ImplementationSession with invalid status", () => {
+    expect(() =>
+      ImplementationSessionSchema.parse({
+        id: "x",
+        issueNumber: 1,
+        repoOwner: "a",
+        repoName: "b",
+        status: "invalid",
+        createdAt: "2026-02-25T00:00:00Z",
+      })
+    ).toThrow();
   });
 });
