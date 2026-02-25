@@ -106,10 +106,6 @@ let mqttClient: mqtt.MqttClient | null = null;
 let workflowRuntime: WorkflowRuntime | null = null;
 let workflowClient: DaprWorkflowClient | null = null;
 
-// --- Workflow Instance Tracking ---
-// Maps project UUID to workflow instance ID
-const projectWorkflowMap = new Map<string, string>();
-
 // --- pm_workflow_instances Query Helpers ---
 interface WorkflowInstanceRow {
   id: string;
@@ -122,6 +118,21 @@ interface WorkflowInstanceRow {
   project_item_id: string | null;
   created_at: string;
   updated_at: string;
+  plan_cycles_used: number;
+  qa_cycles_used: number;
+  retry_budget: number;
+  failure_history: unknown[];
+}
+
+async function lookupByWorkflowId(
+  workflowId: string
+): Promise<WorkflowInstanceRow | null> {
+  if (!pgPool) return null;
+  const { rows } = await pgPool.query<WorkflowInstanceRow>(
+    `SELECT * FROM pm_workflow_instances WHERE workflow_id = $1 LIMIT 1`,
+    [workflowId]
+  );
+  return rows[0] ?? null;
 }
 
 async function lookupByIssue(
@@ -353,9 +364,6 @@ At each review transition, evaluate:
 - Provide clear status updates
 - Flag blockers proactively
 - Document all decisions`;
-
-// --- In-Memory Project Store (would be Dapr state in production) ---
-const projects = new Map<string, Project>();
 
 // --- Helper Functions ---
 async function consultArchitect(question: string, projectId?: string): Promise<unknown> {
@@ -778,8 +786,6 @@ async function transitionState(
     reason,
   });
 
-  projects.set(project.id, project);
-
   // Add comment to issue
   if (project.issueNumber) {
     const comment = `🔄 **State Transition**: ${project.stateHistory[project.stateHistory.length - 2]?.state || "CREATE"} → ${newState}\n\n${reason || ""}`;
@@ -966,8 +972,8 @@ app.get("/healthz", (c) =>
       github: !!GITHUB_TOKEN,
       gitea: !!GITEA_URL && !!GITEA_TOKEN,
     },
-    activeProjects: projects.size,
-    trackedWorkflows: projectWorkflowMap.size,
+    activeProjects: "db-backed",
+    trackedWorkflows: "db-backed",
   })
 );
 
@@ -1025,9 +1031,6 @@ app.post("/projects", async (c) => {
       projectId
     );
 
-    // Track project-to-workflow mapping
-    projectWorkflowMap.set(projectId, workflowInstanceId);
-
     // Store in memory
     if (memory) {
       try {
@@ -1070,18 +1073,20 @@ app.get("/projects/:id", async (c) => {
     }
 
     const projectId = c.req.param("id");
-    const workflowInstanceId = projectWorkflowMap.get(projectId) || projectId;
-
-    const status = await getProjectWorkflowStatus(workflowClient, workflowInstanceId);
-
-    // Also check in-memory map for backwards compatibility
-    const legacyProject = projects.get(projectId);
+    let status;
+    try {
+      status = await getProjectWorkflowStatus(workflowClient, projectId);
+    } catch {
+      const row = await lookupByWorkflowId(projectId);
+      if (row) {
+        status = await getProjectWorkflowStatus(workflowClient, row.workflow_id);
+      }
+    }
 
     return c.json({
       projectId,
-      workflowInstanceId,
-      workflowStatus: status,
-      legacyProject: legacyProject || null,
+      workflowInstanceId: projectId,
+      workflowStatus: status ?? null,
     });
   } catch (error) {
     console.error(`[${AGENT_ID}] Failed to get project status:`, error);
@@ -1090,16 +1095,21 @@ app.get("/projects/:id", async (c) => {
 });
 
 // List all projects
-app.get("/projects", (c) => {
-  const projectList = Array.from(projects.values());
+app.get("/projects", async (c) => {
+  if (!pgPool) return c.json({ count: 0, projects: [] });
+  const { rows } = await pgPool.query<WorkflowInstanceRow>(
+    `SELECT * FROM pm_workflow_instances ORDER BY created_at DESC`
+  );
   return c.json({
-    count: projectList.length,
-    projects: projectList.map((p) => ({
-      id: p.id,
-      title: p.title,
-      state: p.state,
-      platform: p.platform,
-      updatedAt: p.updatedAt,
+    count: rows.length,
+    projects: rows.map((r) => ({
+      workflowId: r.workflow_id,
+      issueNumber: r.issue_number,
+      repoOwner: r.repo_owner,
+      repoName: r.repo_name,
+      currentPhase: r.current_phase,
+      status: r.status,
+      updatedAt: r.updated_at,
     })),
   });
 });
@@ -1112,7 +1122,6 @@ app.post("/projects/:id/advance", async (c) => {
     }
 
     const projectId = c.req.param("id");
-    const workflowInstanceId = projectWorkflowMap.get(projectId) || projectId;
 
     const body = await c.req.json();
     const { targetState, context, reason } = body;
@@ -1120,7 +1129,7 @@ app.post("/projects/:id/advance", async (c) => {
     // Raise advance event to workflow
     await raiseWorkflowEvent(
       workflowClient,
-      workflowInstanceId,
+      projectId,
       "advance",
       { targetState, context: context || {}, reason }
     );
@@ -1128,12 +1137,12 @@ app.post("/projects/:id/advance", async (c) => {
     console.log(`[${AGENT_ID}] Raised advance event for project ${projectId} → ${targetState}`);
 
     // Get updated status
-    const status = await getProjectWorkflowStatus(workflowClient, workflowInstanceId);
+    const status = await getProjectWorkflowStatus(workflowClient, projectId);
 
     return c.json({
       success: true,
       projectId,
-      workflowInstanceId,
+      workflowInstanceId: projectId,
       targetState,
       workflowStatus: status,
       message: `Advance signal sent to workflow. Target state: ${targetState}`,
@@ -1183,9 +1192,11 @@ app.post("/invoke", async (c) => {
 
     case "get-status":
       if (task.projectId) {
-        result = projects.get(task.projectId) || { error: "Project not found" };
+        result = await lookupByWorkflowId(task.projectId) || { error: "Project not found" };
       } else {
-        result = Array.from(projects.values());
+        result = pgPool
+          ? (await pgPool.query<WorkflowInstanceRow>(`SELECT * FROM pm_workflow_instances ORDER BY created_at DESC`)).rows
+          : [];
       }
       break;
 
@@ -1218,7 +1229,7 @@ app.post("/tasks", async (c) => {
     switch (projectTask.action) {
       case "create-project":
         // Create project
-        const project: Project = {
+        result = {
           id: crypto.randomUUID(),
           title: projectTask.title || "Untitled Project",
           description: projectTask.description || "",
@@ -1231,8 +1242,6 @@ app.post("/tasks", async (c) => {
           stateHistory: [],
           metadata: projectTask.context,
         };
-        projects.set(project.id, project);
-        result = project;
         break;
 
       case "consult-architect":
@@ -1667,16 +1676,15 @@ async function start(): Promise<void> {
 
       loadRetryBudget: async (_ctx, input) => {
         if (!pgPool) return { planCyclesUsed: 0, qaCyclesUsed: 0, retryBudget: 3 };
-        const result = await pgPool.query(
+        const { rows } = await pgPool.query(
           `SELECT plan_cycles_used, qa_cycles_used, retry_budget FROM pm_workflow_instances WHERE workflow_id = $1`,
           [input.workflowId]
         );
-        if (result.rows.length === 0) return { planCyclesUsed: 0, qaCyclesUsed: 0, retryBudget: 3 };
-        const row = result.rows[0];
+        if (rows.length === 0) return { planCyclesUsed: 0, qaCyclesUsed: 0, retryBudget: 3 };
         return {
-          planCyclesUsed: row.plan_cycles_used ?? 0,
-          qaCyclesUsed: row.qa_cycles_used ?? 0,
-          retryBudget: row.retry_budget ?? 3,
+          planCyclesUsed: rows[0].plan_cycles_used,
+          qaCyclesUsed: rows[0].qa_cycles_used,
+          retryBudget: rows[0].retry_budget,
         };
       },
 
@@ -1684,36 +1692,147 @@ async function start(): Promise<void> {
         if (!pgPool) return;
         const column = input.phase === "planning" ? "plan_cycles_used" : "qa_cycles_used";
         await pgPool.query(
-          `UPDATE pm_workflow_instances SET ${column} = COALESCE(${column}, 0) + 1, last_failure_reason = $2, updated_at = NOW() WHERE workflow_id = $1`,
-          [input.workflowId, input.failureReason]
+          `UPDATE pm_workflow_instances
+           SET ${column} = ${column} + 1,
+               failure_history = failure_history || $1::jsonb,
+               updated_at = NOW()
+           WHERE workflow_id = $2`,
+          [JSON.stringify({ phase: input.phase, reason: input.failureReason, timestamp: new Date().toISOString() }), input.workflowId]
         );
       },
 
       attemptAutoResolve: async (_ctx, input) => {
-        // Placeholder: consult architect for auto-resolution of blocking questions
-        try {
-          const result = await consultArchitect(
-            `Auto-resolve request for issue #${input.issueNumber} in ${input.repoOwner}/${input.repoName} during ${input.workflowPhase} phase. Can you provide a recommended resolution?`
-          );
-          const guidance = typeof result === "object" && result !== null && "error" in result
-            ? null
-            : JSON.stringify(result);
-          if (guidance) {
-            return {
-              resolved: true,
-              answer: guidance,
-              question: `Auto-resolve during ${input.workflowPhase}`,
-              agentsConsulted: ["architect-agent"],
-            };
-          }
-        } catch (e) {
-          console.warn(`[${AGENT_ID}] attemptAutoResolve failed:`, e);
+        if (!ghProjectClient) {
+          return { resolved: false, question: "Unknown (no GitHub client)", agentsConsulted: [] };
         }
-        return {
-          resolved: false,
-          question: `Auto-resolve during ${input.workflowPhase}`,
-          agentsConsulted: [],
-        };
+
+        // 1. Fetch the question from recent issue comments
+        const comments = await ghProjectClient.getIssueComments(input.repoOwner, input.repoName, input.issueNumber);
+        const recentComments = comments.slice(-5).map((c) => `[${c.user}]: ${c.body}`).join("\n\n");
+
+        const { text: extractedQuestion } = await tracedChatCompletion(
+          {
+            model: LLM_MODEL,
+            system: "Extract the blocked question from these issue comments. Return ONLY the question text, nothing else. If no clear question is found, return 'NONE'.",
+            prompt: recentComments,
+          },
+          eventLog ? { eventLog, traceId: crypto.randomUUID(), agentId: AGENT_ID } : undefined
+        );
+
+        if (!extractedQuestion || extractedQuestion.trim() === "NONE") {
+          return { resolved: false, question: "Could not extract question from comments", agentsConsulted: [] };
+        }
+
+        const question = extractedQuestion.trim();
+
+        // 2. Classify the question
+        const { text: classification } = await tracedChatCompletion(
+          {
+            model: LLM_MODEL,
+            system: `Classify this question into exactly one category. Respond with ONLY the category name.
+Categories:
+- architectural: architecture decisions, design patterns, code structure, where things should go
+- technical-research: technology choices, library usage, implementation techniques, debugging
+- credential-access: authentication, API keys, tokens, permissions, access control setup
+- ambiguous: unclear or could be multiple categories`,
+            prompt: question,
+          },
+          eventLog ? { eventLog, traceId: crypto.randomUUID(), agentId: AGENT_ID } : undefined
+        );
+
+        const category = classification.trim().toLowerCase();
+        const agentsConsulted: string[] = [];
+
+        // 3. Skip agents for credential/access questions — human must handle
+        if (category === "credential-access") {
+          return { resolved: false, question, agentsConsulted: [] };
+        }
+
+        // 4. Agent cascade — first agent based on classification
+        const firstAgent = category === "architectural" ? "architect" : "researcher";
+        let firstResponse: string | null = null;
+
+        if (firstAgent === "architect") {
+          const result = await consultArchitect(question);
+          agentsConsulted.push("architect-agent");
+          if (typeof result === "object" && result !== null && !("error" in result)) {
+            firstResponse = JSON.stringify(result);
+          }
+        } else {
+          const result = await requestResearch(question);
+          agentsConsulted.push("researcher-agent");
+          if (typeof result === "object" && result !== null && !("error" in result)) {
+            firstResponse = JSON.stringify(result);
+          }
+        }
+
+        // 5. Evaluate first response confidence
+        if (firstResponse) {
+          const { text: evalResult } = await tracedChatCompletion(
+            {
+              model: LLM_MODEL,
+              system: `Evaluate if this agent response adequately answers the question. Respond with JSON: { "confident": boolean, "answer": "string" }
+- "confident": true if the response directly and completely answers the question
+- "answer": the answer extracted/summarized from the response`,
+              prompt: `Question: ${question}\n\nAgent response: ${firstResponse}`,
+            },
+            eventLog ? { eventLog, traceId: crypto.randomUUID(), agentId: AGENT_ID } : undefined
+          );
+
+          try {
+            const evaluation = JSON.parse(evalResult);
+            if (evaluation.confident) {
+              return { resolved: true, answer: evaluation.answer, question, agentsConsulted };
+            }
+          } catch { /* parse failure — fall through to second agent */ }
+        }
+
+        // 6. Second agent — the one we didn't try first
+        const secondAgent = firstAgent === "architect" ? "researcher" : "architect";
+        let secondResponse: string | null = null;
+
+        if (secondAgent === "architect") {
+          const contextualQuestion = firstResponse
+            ? `${question}\n\nPrevious attempt by researcher yielded: ${firstResponse}`
+            : question;
+          const result = await consultArchitect(contextualQuestion);
+          agentsConsulted.push("architect-agent");
+          if (typeof result === "object" && result !== null && !("error" in result)) {
+            secondResponse = JSON.stringify(result);
+          }
+        } else {
+          const contextualQuery = firstResponse
+            ? `${question}\n\nPrevious attempt by architect yielded: ${firstResponse}`
+            : question;
+          const result = await requestResearch(contextualQuery);
+          agentsConsulted.push("researcher-agent");
+          if (typeof result === "object" && result !== null && !("error" in result)) {
+            secondResponse = JSON.stringify(result);
+          }
+        }
+
+        // 7. Evaluate combined response
+        const combined = [firstResponse, secondResponse].filter(Boolean).join("\n\n");
+        if (combined) {
+          const { text: evalResult } = await tracedChatCompletion(
+            {
+              model: LLM_MODEL,
+              system: `Evaluate if these combined agent responses adequately answer the question. Respond with JSON: { "confident": boolean, "answer": "string" }`,
+              prompt: `Question: ${question}\n\nCombined responses:\n${combined}`,
+            },
+            eventLog ? { eventLog, traceId: crypto.randomUUID(), agentId: AGENT_ID } : undefined
+          );
+
+          try {
+            const evaluation = JSON.parse(evalResult);
+            if (evaluation.confident) {
+              return { resolved: true, answer: evaluation.answer, question, agentsConsulted };
+            }
+            return { resolved: false, bestGuess: evaluation.answer, question, agentsConsulted };
+          } catch { /* fall through */ }
+        }
+
+        return { resolved: false, question, agentsConsulted };
       },
     };
 
@@ -1768,37 +1887,7 @@ async function start(): Promise<void> {
           const progress: CodePodProgress = JSON.parse(message.toString());
           console.log(`[${AGENT_ID}] Code pod progress: jobId=${progress.jobId} status=${progress.status}`);
 
-          // Find project by jobId in metadata
-          for (const project of projects.values()) {
-            if (project.metadata?.jobId === progress.jobId) {
-              console.log(`[${AGENT_ID}] Matched progress to project ${project.id} - ${project.title}`);
-
-              // Update project metadata with latest progress
-              if (!project.metadata) {
-                project.metadata = {};
-              }
-              project.metadata.lastCodePodProgress = progress;
-              project.updatedAt = new Date().toISOString();
-              projects.set(project.id, project);
-
-              // Add comment to issue if available
-              if (project.issueNumber && progress.status === "completed") {
-                const comment = `✅ **Claude Code Pod Completed**\n\nJob ID: ${progress.jobId}\n${progress.details}`;
-                if (project.platform === "github") {
-                  addGitHubComment(project.repoOwner, project.repoName, project.issueNumber, comment)
-                    .catch(err => console.warn(`[${AGENT_ID}] Failed to add GitHub comment:`, err));
-                }
-              } else if (project.issueNumber && progress.status === "failed") {
-                const comment = `❌ **Claude Code Pod Failed**\n\nJob ID: ${progress.jobId}\n${progress.details}`;
-                if (project.platform === "github") {
-                  addGitHubComment(project.repoOwner, project.repoName, project.issueNumber, comment)
-                    .catch(err => console.warn(`[${AGENT_ID}] Failed to add GitHub comment:`, err));
-                }
-              }
-
-              break;
-            }
-          }
+          console.log(`[${AGENT_ID}] Code pod progress received: jobId=${progress.jobId} status=${progress.status}`);
         } catch (error) {
           console.error(`[${AGENT_ID}] Failed to process MQTT message:`, error);
         }

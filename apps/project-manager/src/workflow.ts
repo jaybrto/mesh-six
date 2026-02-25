@@ -452,9 +452,6 @@ export let attemptAutoResolveActivity: ActivityFn<
 // Main Workflow
 // ---------------------------------------------------------------------------
 
-const MAX_PLAN_CYCLES = 3;
-const MAX_QA_CYCLES = 3;
-
 export const projectWorkflow: TWorkflow = async function* (
   ctx: WorkflowContext,
   input: ProjectWorkflowInput
@@ -548,13 +545,20 @@ export const projectWorkflow: TWorkflow = async function* (
   // PLANNING phase (card is in Planning)
   // =====================================================================
 
-  let totalPlanCycles = 0;
+  // Load retry budget from database (persists across pod restarts)
+  const retryBudget: LoadRetryBudgetOutput = yield ctx.callActivity(
+    loadRetryBudgetActivity,
+    { workflowId }
+  );
+  const maxCycles = input.retryBudget ?? retryBudget.retryBudget;
+
+  let totalPlanCycles = retryBudget.planCyclesUsed;
   let planApproved = false;
 
-  while (totalPlanCycles < MAX_PLAN_CYCLES && !planApproved) {
+  while (totalPlanCycles < maxCycles && !planApproved) {
     totalPlanCycles++;
     console.log(
-      `[Workflow] Planning cycle ${totalPlanCycles}/${MAX_PLAN_CYCLES} for issue #${issueNumber}`
+      `[Workflow] Planning cycle ${totalPlanCycles}/${maxCycles} for issue #${issueNumber}`
     );
 
     // Poll for Claude to post a plan as an issue comment
@@ -571,7 +575,31 @@ export const projectWorkflow: TWorkflow = async function* (
 
     if (planResult.blocked) {
       console.log(`[Workflow] Issue #${issueNumber} is blocked during planning`);
-      // Card was moved to Blocked — wait for external unblock event
+
+      // Attempt autonomous resolution before escalating
+      const autoResolve: AttemptAutoResolveOutput = yield ctx.callActivity(
+        attemptAutoResolveActivity,
+        { issueNumber, repoOwner, repoName, workflowPhase: "PLANNING" }
+      );
+
+      if (autoResolve.resolved) {
+        console.log(`[Workflow] Auto-resolved blocked question for issue #${issueNumber}`);
+        yield ctx.callActivity(addCommentActivity, {
+          issueNumber, repoOwner, repoName,
+          body: `**PM Auto-Resolution** (consulted: ${autoResolve.agentsConsulted.join(", ")})\n\n${autoResolve.answer}`,
+        });
+      } else {
+        // Escalate with best-guess context
+        const ntfyBody = autoResolve.bestGuess
+          ? `${autoResolve.question}\n\nPM best guess (${autoResolve.agentsConsulted.join("+")}): ${autoResolve.bestGuess}`
+          : autoResolve.question;
+        yield ctx.callActivity(notifyBlockedActivity, {
+          issueNumber, repoOwner, repoName,
+          question: ntfyBody,
+          ntfyTopic: "mesh-six-pm",
+        });
+      }
+
       yield ctx.waitForExternalEvent("card-unblocked");
       console.log(`[Workflow] Issue #${issueNumber} unblocked, resuming planning`);
       continue;
@@ -610,6 +638,11 @@ export const projectWorkflow: TWorkflow = async function* (
         repoName,
         body: `**Plan Review — Revision Needed** (confidence: ${(planReview.confidence * 100).toFixed(0)}%)\n\n${planReview.feedback}`,
       });
+      yield ctx.callActivity(incrementRetryCycleActivity, {
+        workflowId,
+        phase: "planning",
+        failureReason: planReview.feedback,
+      });
       console.log(`[Workflow] Plan rejected for issue #${issueNumber}, cycle ${totalPlanCycles}`);
     }
   }
@@ -621,7 +654,7 @@ export const projectWorkflow: TWorkflow = async function* (
       repoName,
       projectItemId,
       workflowId,
-      reason: `Plan not approved after ${MAX_PLAN_CYCLES} revision cycles`,
+      reason: `Plan not approved after ${maxCycles} revision cycles`,
     });
     return {
       issueNumber,
@@ -660,6 +693,31 @@ export const projectWorkflow: TWorkflow = async function* (
 
   if (implResult.blocked) {
     console.log(`[Workflow] Issue #${issueNumber} blocked during implementation`);
+
+    // Attempt autonomous resolution before escalating
+    const autoResolveImpl: AttemptAutoResolveOutput = yield ctx.callActivity(
+      attemptAutoResolveActivity,
+      { issueNumber, repoOwner, repoName, workflowPhase: "IMPLEMENTATION" }
+    );
+
+    if (autoResolveImpl.resolved) {
+      console.log(`[Workflow] Auto-resolved blocked question for issue #${issueNumber}`);
+      yield ctx.callActivity(addCommentActivity, {
+        issueNumber, repoOwner, repoName,
+        body: `**PM Auto-Resolution** (consulted: ${autoResolveImpl.agentsConsulted.join(", ")})\n\n${autoResolveImpl.answer}`,
+      });
+    } else {
+      // Escalate with best-guess context
+      const ntfyBody = autoResolveImpl.bestGuess
+        ? `${autoResolveImpl.question}\n\nPM best guess (${autoResolveImpl.agentsConsulted.join("+")}): ${autoResolveImpl.bestGuess}`
+        : autoResolveImpl.question;
+      yield ctx.callActivity(notifyBlockedActivity, {
+        issueNumber, repoOwner, repoName,
+        question: ntfyBody,
+        ntfyTopic: "mesh-six-pm",
+      });
+    }
+
     yield ctx.waitForExternalEvent("card-unblocked");
     console.log(`[Workflow] Issue #${issueNumber} unblocked, continuing to QA`);
   }
@@ -690,13 +748,13 @@ export const projectWorkflow: TWorkflow = async function* (
   // QA phase (card is in QA)
   // =====================================================================
 
-  let qaCycles = 0;
+  let qaCycles = retryBudget.qaCyclesUsed;
   let qaPassedFinal = false;
 
-  while (qaCycles < MAX_QA_CYCLES && !qaPassedFinal) {
+  while (qaCycles < maxCycles && !qaPassedFinal) {
     qaCycles++;
     console.log(
-      `[Workflow] QA cycle ${qaCycles}/${MAX_QA_CYCLES} for issue #${issueNumber}`
+      `[Workflow] QA cycle ${qaCycles}/${maxCycles} for issue #${issueNumber}`
     );
 
     const qaResult: PollForTestResultsOutput = yield ctx.callActivity(
@@ -712,6 +770,31 @@ export const projectWorkflow: TWorkflow = async function* (
 
     if (qaResult.blocked) {
       console.log(`[Workflow] Issue #${issueNumber} blocked during QA`);
+
+      // Attempt autonomous resolution before escalating
+      const autoResolveQa: AttemptAutoResolveOutput = yield ctx.callActivity(
+        attemptAutoResolveActivity,
+        { issueNumber, repoOwner, repoName, workflowPhase: "QA" }
+      );
+
+      if (autoResolveQa.resolved) {
+        console.log(`[Workflow] Auto-resolved blocked question for issue #${issueNumber}`);
+        yield ctx.callActivity(addCommentActivity, {
+          issueNumber, repoOwner, repoName,
+          body: `**PM Auto-Resolution** (consulted: ${autoResolveQa.agentsConsulted.join(", ")})\n\n${autoResolveQa.answer}`,
+        });
+      } else {
+        // Escalate with best-guess context
+        const ntfyBody = autoResolveQa.bestGuess
+          ? `${autoResolveQa.question}\n\nPM best guess (${autoResolveQa.agentsConsulted.join("+")}): ${autoResolveQa.bestGuess}`
+          : autoResolveQa.question;
+        yield ctx.callActivity(notifyBlockedActivity, {
+          issueNumber, repoOwner, repoName,
+          question: ntfyBody,
+          ntfyTopic: "mesh-six-pm",
+        });
+      }
+
       yield ctx.waitForExternalEvent("card-unblocked");
       console.log(`[Workflow] Issue #${issueNumber} unblocked, resuming QA`);
       continue;
@@ -751,6 +834,12 @@ export const projectWorkflow: TWorkflow = async function* (
         failures: testEval.failures,
       });
 
+      yield ctx.callActivity(incrementRetryCycleActivity, {
+        workflowId,
+        phase: "qa",
+        failureReason: testEval.failures.join("; "),
+      });
+
       yield ctx.callActivity(recordPendingMoveActivity, {
         projectItemId,
         toColumn: "Planning",
@@ -767,7 +856,7 @@ export const projectWorkflow: TWorkflow = async function* (
       // Wait for Claude to fix and produce new test results
       // (Re-enter QA after Planning -> In Progress -> QA cycle is implicit
       //  since GWA reacts to column changes. We wait for the card to come back.)
-      if (qaCycles < MAX_QA_CYCLES) {
+      if (qaCycles < maxCycles) {
         // Wait for the card to be moved back through the pipeline.
         // The PM will detect the card returning to QA via webhook events.
         yield ctx.waitForExternalEvent("qa-ready");
@@ -782,7 +871,7 @@ export const projectWorkflow: TWorkflow = async function* (
       repoName,
       projectItemId,
       workflowId,
-      reason: `Tests did not pass after ${MAX_QA_CYCLES} QA cycles`,
+      reason: `Tests did not pass after ${maxCycles} QA cycles`,
     });
     return {
       issueNumber,
@@ -1125,8 +1214,9 @@ export async function pollGithubForCompletion<T>(
       return { result, timedOut: false, blocked: false };
     }
 
-    // Wait before next poll
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    // Add 0-5s random jitter to prevent synchronized polling from concurrent workflows
+    const jitter = Math.floor(Math.random() * 5000);
+    await new Promise((resolve) => setTimeout(resolve, intervalMs + jitter));
   }
 
   return { result: null, timedOut: true, blocked: false };
