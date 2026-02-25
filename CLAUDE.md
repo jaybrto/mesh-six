@@ -57,9 +57,12 @@ Every agent follows the same template (`apps/simple-agent/src/index.ts` is the r
 
 ### Key Packages
 
-- **`@mesh-six/core`** (`packages/core/`): Shared library — types (Zod schemas), `AgentRegistry`, `AgentScorer`, `AgentMemory`, `buildAgentContext()`, `transitionClose()`. All agents depend on this.
+- **`@mesh-six/core`** (`packages/core/`): Shared library — types (Zod schemas), `AgentRegistry`, `AgentScorer`, `AgentMemory`, `buildAgentContext()`, `transitionClose()`, credential utilities (`isCredentialExpired`, `buildCredentialsJson`, etc.), dialog handler (`matchKnownDialog`, `parseDialogResponse`). All agents depend on this.
 - **`@mesh-six/orchestrator`** (`apps/orchestrator/`): Central task router. No LLM dependency.
 - **`@mesh-six/project-manager`** (`apps/project-manager/`): Dapr Workflow state machine (CREATE → PLANNING → REVIEW → IN_PROGRESS → QA → DEPLOY → VALIDATE → ACCEPTED). Uses `buildAgentContext()` for bounded LLM context and `transitionClose()` for reflect-before-reset learning.
+- **`@mesh-six/auth-service`** (`apps/auth-service/`): Credential lifecycle management. Hono+Dapr microservice backed by PostgreSQL. Manages project configs, credential push/refresh, bundle provisioning (tar.gz with Claude CLI config files), and OAuth token refresh timer. Publishes `credential-refreshed` and `config-updated` events via Dapr pub/sub. No LLM dependency.
+- **`@mesh-six/implementer`** (`apps/implementer/`): Autonomous code implementation agent. StatefulSet with Dapr actor runtime — one actor per issue session. Provisions credentials from auth-service, clones repos into worktrees, runs Claude CLI in tmux sessions, monitors for auth failures/questions/completion. Session state tracked in PostgreSQL (implementation_sessions, session_questions). Custom Dockerfile (`docker/Dockerfile.implementer`) with tmux + git + Claude CLI.
+- **`@mesh-six/llm-service`** (`apps/llm-service/`): Claude CLI gateway with Dapr actor concurrency control. Provisions credentials from auth-service via Dapr service invocation (replaced GWA dependency). Subscribes to `credential-refreshed` events for proactive credential sync.
 - **`@mesh-six/dashboard`** (`apps/dashboard/`): React 19 + Vite + Tailwind 4 SPA with MQTT WebSocket for real-time monitoring. This is the only non-Hono app — uses nginx in k8s, no Dapr sidecar.
 
 ### Context Window Management
@@ -71,7 +74,7 @@ Memory scopes: `task` (same task), `agent` (same agent type), `global` (cross-ag
 ### Infrastructure Dependencies
 
 All infrastructure is pre-existing in the k3s cluster:
-- **PostgreSQL HA** (`pgsql.k3s.bto.bar:5432`, database `mesh_six`) — task history, repo registry, pgvector memories
+- **PostgreSQL HA** (`pgsql.k3s.bto.bar:5432`, database `mesh_six`) — task history, repo registry, pgvector memories, auth credentials, implementation sessions
 - **Redis Cluster** — Dapr state store for agent registry
 - **RabbitMQ HA** — Dapr pub/sub backbone, MQTT plugin for real-time events
 - **Ollama + LiteLLM** — LLM gateway (OpenAI-compatible API called directly via `@mesh-six/core` llm module)
@@ -91,7 +94,7 @@ Copies also exist in `dapr/components/` for local `dapr run` usage — keep in s
 
 ### K8s Manifests
 
-Kustomize-based in `k8s/base/` with overlays in `k8s/overlays/{dev,prod}`. Each agent has its own subdirectory with Deployment + Service. Shared Dockerfile at `docker/Dockerfile.agent` parameterized by `AGENT_APP` build arg. Container registry: `registry.bto.bar/jaybrto/mesh-six-{agent-name}` (Gitea via external Caddy proxy for pull; CI pushes to internal `gitea-http.gitea-system.svc.cluster.local:3000`). Vault + External Secrets Operator syncs secrets from `secret/data/mesh-six`.
+Kustomize-based in `k8s/base/` with overlays in `k8s/overlays/{dev,prod}`. Each agent has its own subdirectory with Deployment + Service (or StatefulSet for stateful agents like implementer). Shared Dockerfile at `docker/Dockerfile.agent` parameterized by `AGENT_APP` build arg; implementer uses custom `docker/Dockerfile.implementer` (tmux + git + Claude CLI). Container registry: `registry.bto.bar/jaybrto/mesh-six-{agent-name}` (Gitea via external Caddy proxy for pull; CI pushes to internal `gitea-http.gitea-system.svc.cluster.local:3000`). Vault + External Secrets Operator syncs secrets from `secret/data/mesh-six`.
 
 ## Conventions
 
@@ -102,7 +105,9 @@ Kustomize-based in `k8s/base/` with overlays in `k8s/overlays/{dev,prod}`. Each 
 - **`bun install --frozen-lockfile`** in CI/Docker; `bunfig.toml` enforces exact versions
 - Core library exports from `packages/core/src/index.ts` — import as `@mesh-six/core`
 - Agent registry uses an index key (`agent:_index`) since Redis via Dapr doesn't support prefix scans
-- Constants `DAPR_PUBSUB_NAME`, `DAPR_STATE_STORE`, `TASK_RESULTS_TOPIC` exported from core
+- Constants `DAPR_PUBSUB_NAME`, `DAPR_STATE_STORE`, `TASK_RESULTS_TOPIC`, `AUTH_SERVICE_APP_ID`, `CREDENTIAL_REFRESHED_TOPIC`, `CONFIG_UPDATED_TOPIC`, `SESSION_BLOCKED_TOPIC` exported from core
+- Credential provisioning uses auth-service via Dapr service invocation (not direct HTTP) — `http://{DAPR_HOST}:{DAPR_HTTP_PORT}/v1.0/invoke/auth-service/method/...`
+- Push credentials to auth-service via `scripts/push-credentials.ts` (reads local `~/.claude/.credentials.json`)
 
 ## Versioning & Changelog
 

@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-25: GWA Migration — Auth Service, Implementer Agent, Credential Management
+
+Merge github-workflow-agents (GWA) credential management, dialog handling, and implementation agent into mesh-six. Auth-service replaces GWA orchestrator for credential lifecycle. LLM service drops GWA dependency. Implementer agent runs Claude CLI in tmux for autonomous code implementation.
+
+#### Core Library
+- **@mesh-six/core@0.7.0**: Add credential utilities, dialog handler, and auth/session types
+  - New `credentials.ts` module: `isCredentialExpired`, `syncEphemeralConfig`, `buildCredentialsJson`, `buildConfigJson`, `buildSettingsJson`, `buildClaudeJson`
+  - New `dialog-handler.ts` module: `matchKnownDialog`, `parseDialogResponse`, `looksNormal`, `KNOWN_DIALOGS`, `DIALOG_ANALYSIS_PROMPT`, `ClaudeDialogError`
+  - New auth Zod schemas: `ProjectConfigSchema`, `CredentialPushRequestSchema`, `ProjectCredentialSchema`, `ProvisionRequestSchema`, `ProvisionResponseSchema`, `CredentialHealthSchema`
+  - New session types: `ImplementationSessionSchema`, `SessionQuestionSchema`
+  - New constants: `AUTH_SERVICE_APP_ID`, `CREDENTIAL_REFRESHED_TOPIC`, `CONFIG_UPDATED_TOPIC`, `SESSION_BLOCKED_TOPIC`
+  - Add `claude.test.ts` covering all 15 GWA auth failure patterns
+
+#### New Service: Auth Service
+- **@mesh-six/auth-service@0.1.0**: Hono+Dapr microservice for credential lifecycle management
+  - Project CRUD: `POST /projects`, `GET /projects/:id`, `PUT /projects/:id`
+  - Credential management: `POST /projects/:id/credentials` (push), `GET /projects/:id/health`, `POST /projects/:id/refresh`
+  - Bundle provisioning: `POST /projects/:id/provision`, `GET /projects/:id/provision/:bundleId` (tar.gz with .credentials.json, config.json, settings.json, .claude.json)
+  - OAuth refresh timer: auto-refreshes expiring credentials every 30 minutes
+  - Dapr pub/sub: publishes `credential-refreshed` and `config-updated` events
+
+#### New Agent: Implementer
+- **@mesh-six/implementer@0.1.0**: StatefulSet agent for autonomous Claude CLI code implementation
+  - Dapr actor runtime: one actor per issue session, lifecycle management (provision → clone → worktree → tmux)
+  - Tmux session management: create/send/capture/kill sessions via Bun.spawn
+  - Session monitoring: periodic pane capture, auth failure detection, question detection, completion detection
+  - Session DB: full CRUD for implementation_sessions, session_prompts, session_tool_calls, session_activity_log, session_questions
+  - `docker/Dockerfile.implementer`: Bun + tmux + git + Claude CLI
+
+#### LLM Service Migration
+- Replace `gwa-client.ts` with `auth-client.ts` — provision credentials from auth-service via Dapr service invocation
+- Add `credential-refreshed` event subscription for proactive credential sync
+- Remove GWA env vars (GWA_ORCHESTRATOR_URL, GWA_API_KEY, GWA_PROJECT_ID), add AUTH_PROJECT_ID
+
+#### Infrastructure
+- K8s: auth-service Deployment + Service (Dapr sidecar, PG secrets, 128Mi/256Mi)
+- K8s: implementer StatefulSet + headless Service (Dapr sidecar, PVCs: claude-session 10Gi + worktrees 30Gi)
+- CI: add auth-service and implementer to build matrix, map implementer to custom Dockerfile
+- Update llm-service deployment: replace GWA env vars with AUTH_PROJECT_ID
+
+#### Database Migrations
+- `006_auth_tables.sql`: auth_projects, auth_credentials (with partial indexes), auth_bundles
+- `007_session_tables.sql`: implementation_sessions, session_prompts, session_tool_calls, session_activity_log, session_questions
+
+#### Scripts
+- `scripts/push-credentials.ts`: CLI to push local Claude credentials to auth-service
+
 ### Fixed - 2026-02-21: Add llm-service to CI/CD Build Pipeline
 
 #### CI/CD
