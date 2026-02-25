@@ -44,12 +44,61 @@ export interface LinkedPR {
   createdAt: string;
 }
 
+export interface TokenBucketConfig {
+  maxTokens: number;
+  refillRate: number; // tokens per minute
+}
+
+export class TokenBucket {
+  private tokens: number;
+  private maxTokens: number;
+  private refillRatePerMs: number;
+  private lastRefill: number;
+
+  constructor(config: TokenBucketConfig) {
+    this.maxTokens = config.maxTokens;
+    this.tokens = config.maxTokens;
+    this.refillRatePerMs = config.refillRate / 60_000;
+    this.lastRefill = Date.now();
+  }
+
+  private refill(): void {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    this.tokens = Math.min(this.maxTokens, this.tokens + elapsed * this.refillRatePerMs);
+    this.lastRefill = now;
+  }
+
+  tryConsume(): boolean {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return true;
+    }
+    return false;
+  }
+
+  async waitForToken(): Promise<void> {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens -= 1;
+      return;
+    }
+    const deficit = 1 - this.tokens;
+    const waitMs = Math.ceil(deficit / this.refillRatePerMs);
+    await new Promise((r) => setTimeout(r, waitMs));
+    this.refill();
+    this.tokens -= 1;
+  }
+}
+
 export class GitHubProjectClient {
   private gql: typeof graphql;
   private rest: Octokit;
   private projectId: string;
   private statusFieldId: string;
   private columnMap: ColumnMapping = {};
+  private rateLimiter: TokenBucket;
 
   constructor(config: GitHubClientConfig) {
     this.gql = graphql.defaults({
@@ -58,6 +107,11 @@ export class GitHubProjectClient {
     this.rest = new Octokit({ auth: config.token });
     this.projectId = config.projectId;
     this.statusFieldId = config.statusFieldId;
+    this.rateLimiter = new TokenBucket({ maxTokens: 50, refillRate: 80 });
+  }
+
+  private async rateLimit(): Promise<void> {
+    await this.rateLimiter.waitForToken();
   }
 
   /**
@@ -65,6 +119,7 @@ export class GitHubProjectClient {
    * Must be called once at startup before moveCard can work.
    */
   async loadColumnMapping(): Promise<ColumnMapping> {
+    await this.rateLimit();
     const result: any = await this.gql(
       `query($projectId: ID!) {
         node(id: $projectId) {
@@ -110,6 +165,7 @@ export class GitHubProjectClient {
    * Move a project card to a target column.
    */
   async moveCard(projectItemId: string, toColumn: string): Promise<void> {
+    await this.rateLimit();
     const optionId = this.columnMap[toColumn];
     if (!optionId) {
       throw new Error(
@@ -143,6 +199,7 @@ export class GitHubProjectClient {
    * Get the current column of a project item.
    */
   async getItemColumn(projectItemId: string): Promise<string | null> {
+    await this.rateLimit();
     const result: any = await this.gql(
       `query($itemId: ID!) {
         node(id: $itemId) {
@@ -165,6 +222,7 @@ export class GitHubProjectClient {
    * Get all project items currently in a given column (e.g., "Todo").
    */
   async getProjectItemsByColumn(columnName: string): Promise<ProjectItem[]> {
+    await this.rateLimit();
     const items: ProjectItem[] = [];
     let cursor: string | null = null;
     let hasMore = true;
@@ -248,6 +306,7 @@ export class GitHubProjectClient {
     issueNumber: number,
     since?: string
   ): Promise<IssueComment[]> {
+    await this.rateLimit();
     const { data } = await this.rest.issues.listComments({
       owner,
       repo,
@@ -273,6 +332,7 @@ export class GitHubProjectClient {
     repo: string,
     issueNumber: number
   ): Promise<LinkedPR[]> {
+    await this.rateLimit();
     const { data } = await this.rest.pulls.list({
       owner,
       repo,
@@ -321,6 +381,7 @@ export class GitHubProjectClient {
     issueNumber: number,
     body: string
   ): Promise<number> {
+    await this.rateLimit();
     const { data } = await this.rest.issues.createComment({
       owner,
       repo,
@@ -340,6 +401,7 @@ export class GitHubProjectClient {
     body: string,
     labels?: string[]
   ): Promise<{ number: number; url: string }> {
+    await this.rateLimit();
     const { data } = await this.rest.issues.create({
       owner,
       repo,

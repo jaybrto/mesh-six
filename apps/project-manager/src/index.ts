@@ -1664,6 +1664,57 @@ async function start(): Promise<void> {
           };
         }
       },
+
+      loadRetryBudget: async (_ctx, input) => {
+        if (!pgPool) return { planCyclesUsed: 0, qaCyclesUsed: 0, retryBudget: 3 };
+        const result = await pgPool.query(
+          `SELECT plan_cycles_used, qa_cycles_used, retry_budget FROM pm_workflow_instances WHERE workflow_id = $1`,
+          [input.workflowId]
+        );
+        if (result.rows.length === 0) return { planCyclesUsed: 0, qaCyclesUsed: 0, retryBudget: 3 };
+        const row = result.rows[0];
+        return {
+          planCyclesUsed: row.plan_cycles_used ?? 0,
+          qaCyclesUsed: row.qa_cycles_used ?? 0,
+          retryBudget: row.retry_budget ?? 3,
+        };
+      },
+
+      incrementRetryCycle: async (_ctx, input) => {
+        if (!pgPool) return;
+        const column = input.phase === "planning" ? "plan_cycles_used" : "qa_cycles_used";
+        await pgPool.query(
+          `UPDATE pm_workflow_instances SET ${column} = COALESCE(${column}, 0) + 1, last_failure_reason = $2, updated_at = NOW() WHERE workflow_id = $1`,
+          [input.workflowId, input.failureReason]
+        );
+      },
+
+      attemptAutoResolve: async (_ctx, input) => {
+        // Placeholder: consult architect for auto-resolution of blocking questions
+        try {
+          const result = await consultArchitect(
+            `Auto-resolve request for issue #${input.issueNumber} in ${input.repoOwner}/${input.repoName} during ${input.workflowPhase} phase. Can you provide a recommended resolution?`
+          );
+          const guidance = typeof result === "object" && result !== null && "error" in result
+            ? null
+            : JSON.stringify(result);
+          if (guidance) {
+            return {
+              resolved: true,
+              answer: guidance,
+              question: `Auto-resolve during ${input.workflowPhase}`,
+              agentsConsulted: ["architect-agent"],
+            };
+          }
+        } catch (e) {
+          console.warn(`[${AGENT_ID}] attemptAutoResolve failed:`, e);
+        }
+        return {
+          resolved: false,
+          question: `Auto-resolve during ${input.workflowPhase}`,
+          agentsConsulted: [],
+        };
+      },
     };
 
     // Create and start workflow runtime

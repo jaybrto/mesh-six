@@ -52,6 +52,7 @@ export interface ProjectWorkflowInput {
   repoName: string;
   projectItemId: string;
   contentNodeId: string;
+  retryBudget?: number;
 }
 
 /** Result returned when the workflow completes */
@@ -264,6 +265,37 @@ export interface CompressContextOutput {
   fallback: boolean;
 }
 
+export interface LoadRetryBudgetInput {
+  workflowId: string;
+}
+
+export interface LoadRetryBudgetOutput {
+  planCyclesUsed: number;
+  qaCyclesUsed: number;
+  retryBudget: number;
+}
+
+export interface IncrementRetryCycleInput {
+  workflowId: string;
+  phase: "planning" | "qa";
+  failureReason: string;
+}
+
+export interface AttemptAutoResolveInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  workflowPhase: string;
+}
+
+export interface AttemptAutoResolveOutput {
+  resolved: boolean;
+  answer?: string;
+  bestGuess?: string;
+  question: string;
+  agentsConsulted: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Activity type alias
 // ---------------------------------------------------------------------------
@@ -393,6 +425,27 @@ export let compressContextActivity: ActivityFn<
   CompressContextOutput
 > = async () => {
   throw new Error("compressContextActivity not initialized");
+};
+
+export let loadRetryBudgetActivity: ActivityFn<
+  LoadRetryBudgetInput,
+  LoadRetryBudgetOutput
+> = async () => {
+  throw new Error("loadRetryBudgetActivity not initialized");
+};
+
+export let incrementRetryCycleActivity: ActivityFn<
+  IncrementRetryCycleInput,
+  void
+> = async () => {
+  throw new Error("incrementRetryCycleActivity not initialized");
+};
+
+export let attemptAutoResolveActivity: ActivityFn<
+  AttemptAutoResolveInput,
+  AttemptAutoResolveOutput
+> = async () => {
+  throw new Error("attemptAutoResolveActivity not initialized");
 };
 
 // ---------------------------------------------------------------------------
@@ -886,6 +939,9 @@ export interface WorkflowActivityImplementations {
   reportSuccess: typeof reportSuccessActivity;
   moveToFailed: typeof moveToFailedActivity;
   compressContext: typeof compressContextActivity;
+  loadRetryBudget: typeof loadRetryBudgetActivity;
+  incrementRetryCycle: typeof incrementRetryCycleActivity;
+  attemptAutoResolve: typeof attemptAutoResolveActivity;
 }
 
 // ---------------------------------------------------------------------------
@@ -915,6 +971,9 @@ export function createWorkflowRuntime(
   reportSuccessActivity = activityImpls.reportSuccess;
   moveToFailedActivity = activityImpls.moveToFailed;
   compressContextActivity = activityImpls.compressContext;
+  loadRetryBudgetActivity = activityImpls.loadRetryBudget;
+  incrementRetryCycleActivity = activityImpls.incrementRetryCycle;
+  attemptAutoResolveActivity = activityImpls.attemptAutoResolve;
 
   const runtime = new WorkflowRuntime({
     daprHost: DAPR_HOST,
@@ -944,6 +1003,9 @@ export function createWorkflowRuntime(
   runtime.registerActivity(reportSuccessActivity);
   runtime.registerActivity(moveToFailedActivity);
   runtime.registerActivity(compressContextActivity);
+  runtime.registerActivity(loadRetryBudgetActivity);
+  runtime.registerActivity(incrementRetryCycleActivity);
+  runtime.registerActivity(attemptAutoResolveActivity);
 
   return runtime;
 }

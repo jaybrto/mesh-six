@@ -75,6 +75,8 @@ export {
 // GitHub Projects
 export {
   GitHubProjectClient,
+  TokenBucket,
+  type TokenBucketConfig,
   type GitHubClientConfig,
   type ColumnMapping,
   type ProjectItem,
