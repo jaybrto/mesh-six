@@ -297,6 +297,82 @@ export interface AttemptAutoResolveOutput {
 }
 
 // ---------------------------------------------------------------------------
+// New activity types for event-driven workflow + architect actor
+// ---------------------------------------------------------------------------
+
+export interface ComplexityGateInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+}
+
+export interface ComplexityGateOutput {
+  simple: boolean;
+}
+
+export interface StartSessionInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  workflowId: string;
+  implementationPrompt: string;
+  branch: string;
+}
+
+export interface StartSessionOutput {
+  sessionId: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface ConsultArchitectActorInput {
+  actorId: string;
+  questionText: string;
+  source: string;
+}
+
+export interface ConsultArchitectActorOutput {
+  confident: boolean;
+  answer?: string;
+  bestGuess?: string;
+}
+
+export interface InjectAnswerInput {
+  implementerActorId: string;
+  answerText: string;
+}
+
+export interface InjectAnswerOutput {
+  ok: boolean;
+  error?: string;
+}
+
+export interface NotifyHumanQuestionInput {
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  workflowId: string;
+  questionText: string;
+  architectBestGuess?: string;
+}
+
+export interface ProcessHumanAnswerInput {
+  architectActorId: string;
+  questionText: string;
+  humanAnswer: string;
+}
+
+export interface InitializeArchitectActorInput {
+  actorId: string;
+  issueNumber: number;
+  repoOwner: string;
+  repoName: string;
+  workflowId: string;
+  projectItemId: string;
+  issueTitle: string;
+}
+
+// ---------------------------------------------------------------------------
 // Activity type alias
 // ---------------------------------------------------------------------------
 
@@ -446,6 +522,55 @@ export let attemptAutoResolveActivity: ActivityFn<
   AttemptAutoResolveOutput
 > = async () => {
   throw new Error("attemptAutoResolveActivity not initialized");
+};
+
+export let complexityGateActivity: ActivityFn<
+  ComplexityGateInput,
+  ComplexityGateOutput
+> = async () => {
+  throw new Error("complexityGateActivity not initialized");
+};
+
+export let startSessionActivity: ActivityFn<
+  StartSessionInput,
+  StartSessionOutput
+> = async () => {
+  throw new Error("startSessionActivity not initialized");
+};
+
+export let consultArchitectActorActivity: ActivityFn<
+  ConsultArchitectActorInput,
+  ConsultArchitectActorOutput
+> = async () => {
+  throw new Error("consultArchitectActorActivity not initialized");
+};
+
+export let injectAnswerActivity: ActivityFn<
+  InjectAnswerInput,
+  InjectAnswerOutput
+> = async () => {
+  throw new Error("injectAnswerActivity not initialized");
+};
+
+export let notifyHumanQuestionActivity: ActivityFn<
+  NotifyHumanQuestionInput,
+  void
+> = async () => {
+  throw new Error("notifyHumanQuestionActivity not initialized");
+};
+
+export let processHumanAnswerActivity: ActivityFn<
+  ProcessHumanAnswerInput,
+  void
+> = async () => {
+  throw new Error("processHumanAnswerActivity not initialized");
+};
+
+export let initializeArchitectActorActivity: ActivityFn<
+  InitializeArchitectActorInput,
+  void
+> = async () => {
+  throw new Error("initializeArchitectActorActivity not initialized");
 };
 
 // ---------------------------------------------------------------------------
@@ -1031,6 +1156,13 @@ export interface WorkflowActivityImplementations {
   loadRetryBudget: typeof loadRetryBudgetActivity;
   incrementRetryCycle: typeof incrementRetryCycleActivity;
   attemptAutoResolve: typeof attemptAutoResolveActivity;
+  complexityGate: typeof complexityGateActivity;
+  startSession: typeof startSessionActivity;
+  consultArchitectActor: typeof consultArchitectActorActivity;
+  injectAnswer: typeof injectAnswerActivity;
+  notifyHumanQuestion: typeof notifyHumanQuestionActivity;
+  processHumanAnswer: typeof processHumanAnswerActivity;
+  initializeArchitectActor: typeof initializeArchitectActorActivity;
 }
 
 // ---------------------------------------------------------------------------
@@ -1063,6 +1195,13 @@ export function createWorkflowRuntime(
   loadRetryBudgetActivity = activityImpls.loadRetryBudget;
   incrementRetryCycleActivity = activityImpls.incrementRetryCycle;
   attemptAutoResolveActivity = activityImpls.attemptAutoResolve;
+  complexityGateActivity = activityImpls.complexityGate;
+  startSessionActivity = activityImpls.startSession;
+  consultArchitectActorActivity = activityImpls.consultArchitectActor;
+  injectAnswerActivity = activityImpls.injectAnswer;
+  notifyHumanQuestionActivity = activityImpls.notifyHumanQuestion;
+  processHumanAnswerActivity = activityImpls.processHumanAnswer;
+  initializeArchitectActorActivity = activityImpls.initializeArchitectActor;
 
   const runtime = new WorkflowRuntime({
     daprHost: DAPR_HOST,
@@ -1095,6 +1234,13 @@ export function createWorkflowRuntime(
   runtime.registerActivity(loadRetryBudgetActivity);
   runtime.registerActivity(incrementRetryCycleActivity);
   runtime.registerActivity(attemptAutoResolveActivity);
+  runtime.registerActivity(complexityGateActivity);
+  runtime.registerActivity(startSessionActivity);
+  runtime.registerActivity(consultArchitectActorActivity);
+  runtime.registerActivity(injectAnswerActivity);
+  runtime.registerActivity(notifyHumanQuestionActivity);
+  runtime.registerActivity(processHumanAnswerActivity);
+  runtime.registerActivity(initializeArchitectActorActivity);
 
   return runtime;
 }
