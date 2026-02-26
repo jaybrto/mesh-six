@@ -123,6 +123,65 @@ export async function getSession(sessionId: string): Promise<SessionRow | null> 
   return rows[0] ?? null;
 }
 
+export async function listSessions(filters?: {
+  status?: SessionRow["status"];
+  repoOwner?: string;
+  repoName?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ sessions: SessionRow[]; total: number }> {
+  const db = getPool();
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  let idx = 1;
+
+  if (filters?.status) {
+    conditions.push(`status = $${idx++}`);
+    params.push(filters.status);
+  }
+  if (filters?.repoOwner) {
+    conditions.push(`repo_owner = $${idx++}`);
+    params.push(filters.repoOwner);
+  }
+  if (filters?.repoName) {
+    conditions.push(`repo_name = $${idx++}`);
+    params.push(filters.repoName);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const countResult = await db.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM implementation_sessions ${where}`,
+    params
+  );
+  const total = parseInt(countResult.rows[0].count, 10);
+
+  const limit = filters?.limit ?? 50;
+  const offset = filters?.offset ?? 0;
+
+  const { rows } = await db.query<SessionRow>(
+    `SELECT
+       id,
+       issue_number AS "issueNumber",
+       repo_owner   AS "repoOwner",
+       repo_name    AS "repoName",
+       status,
+       actor_id     AS "actorId",
+       tmux_window  AS "tmuxWindow",
+       credential_bundle_id AS "credentialBundleId",
+       started_at   AS "startedAt",
+       completed_at AS "completedAt",
+       created_at   AS "createdAt"
+     FROM implementation_sessions
+     ${where}
+     ORDER BY created_at DESC
+     LIMIT $${idx++} OFFSET $${idx++}`,
+    [...params, limit, offset]
+  );
+
+  return { sessions: rows, total };
+}
+
 // ---------------------------------------------------------------------------
 // session_prompts
 // ---------------------------------------------------------------------------

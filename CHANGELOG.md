@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-26: Session REST API (GWA Phase 21 API Layer)
+
+REST API endpoints for mobile app and external dashboard consumption.
+
+**@mesh-six/implementer@0.5.0**
+- `session-db.ts`: `listSessions(filters?)` — paginated session list with optional status/repo filters
+- `index.ts`: `GET /sessions` — list sessions with query params (`status`, `repoOwner`, `repoName`, `limit`, `offset`), returns `{ sessions, total }`
+- `index.ts`: `GET /sessions/:id` — aggregated session detail (session + questions + latest checkpoint)
+- `index.ts`: `POST /sessions/:id/answer` — REST wrapper around actor `injectAnswer` for answering blocked session questions
+
 ### Added - 2026-02-26: Live Terminal Streaming & Snapshots (GWA Phase 20 Migration)
 
 MQTT-based live terminal output streaming, asciicast v2 session recordings with MinIO S3 upload, ANSI terminal snapshots at lifecycle events, and a dashboard terminal viewer with xterm.js.

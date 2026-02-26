@@ -26,6 +26,10 @@ import { getOrCreateActor } from "./actor.js";
 import { SessionMonitor } from "./monitor.js";
 import {
   insertSession,
+  getSession,
+  listSessions,
+  getSessionQuestions,
+  getLatestCheckpoint,
   getSessionSnapshots,
   getSessionRecordings,
   getRecordingById,
@@ -122,6 +126,44 @@ app.get("/recordings/:id/url", async (c) => {
   const client = createMinioClient(minioConfig);
   const url = await getMinioPresignedUrl(client, minioConfig.bucket, recording.s3Key);
   return c.json({ url });
+});
+
+// Session REST API — mobile app / dashboard consumption
+app.get("/sessions", async (c) => {
+  const status = c.req.query("status") as
+    | "idle" | "running" | "blocked" | "completed" | "failed" | "interrupted"
+    | undefined;
+  const repoOwner = c.req.query("repoOwner");
+  const repoName = c.req.query("repoName");
+  const limit = c.req.query("limit") ? Number(c.req.query("limit")) : undefined;
+  const offset = c.req.query("offset") ? Number(c.req.query("offset")) : undefined;
+  const result = await listSessions({ status, repoOwner, repoName, limit, offset });
+  return c.json(result);
+});
+
+app.get("/sessions/:id", async (c) => {
+  const sessionId = c.req.param("id");
+  const session = await getSession(sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  const [questions, checkpoint] = await Promise.all([
+    getSessionQuestions(sessionId),
+    getLatestCheckpoint(sessionId),
+  ]);
+  return c.json({ ...session, questions, latestCheckpoint: checkpoint });
+});
+
+app.post("/sessions/:id/answer", async (c) => {
+  const sessionId = c.req.param("id");
+  const body = await c.req.json() as { answerText?: string };
+  if (!body.answerText) return c.json({ error: "answerText is required" }, 400);
+
+  const session = await getSession(sessionId);
+  if (!session) return c.json({ error: "Session not found" }, 404);
+  if (!session.actorId) return c.json({ error: "Session has no actor" }, 400);
+
+  const actor = getOrCreateActor(session.actorId);
+  const result = await actor.injectAnswer({ answerText: body.answerText });
+  return c.json(result, result.ok ? 200 : 400);
 });
 
 // Direct invocation endpoint — for synchronous calls (e.g., actor status queries)
