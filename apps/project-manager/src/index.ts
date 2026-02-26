@@ -1405,6 +1405,37 @@ app.post("/board-events", async (c) => {
   return c.json({ status: "SUCCESS" });
 });
 
+// --- ntfy Reply Webhook (human answer flow) ---
+app.post("/ntfy-reply", async (c) => {
+  try {
+    const workflowId = c.req.header("X-Workflow-Id");
+    const questionEncoded = c.req.header("X-Question");
+    const body = await c.req.text();
+
+    if (!workflowId || !body) {
+      return c.json({ error: "Missing workflowId or reply body" }, 400);
+    }
+
+    const question = questionEncoded ? decodeURIComponent(questionEncoded) : "";
+
+    console.log(`[${AGENT_ID}] ntfy reply received for workflow ${workflowId}: ${body.substring(0, 100)}`);
+
+    // Raise human-answer event on the workflow instance
+    if (workflowClient) {
+      await raiseWorkflowEvent(workflowClient, workflowId, "human-answer", {
+        answer: body.trim(),
+        question,
+        source: "ntfy",
+      });
+    }
+
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error(`[${AGENT_ID}] ntfy reply handler error:`, err);
+    return c.json({ error: String(err) }, 500);
+  }
+});
+
 // --- Lifecycle ---
 let heartbeatInterval: Timer | null = null;
 
