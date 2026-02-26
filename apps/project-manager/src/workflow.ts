@@ -23,6 +23,13 @@ import {
   DaprWorkflowClient,
 } from "@dapr/dapr";
 
+import type {
+  PlanningEventPayload,
+  ImplEventPayload,
+  QaEventPayload,
+  HumanAnswerPayload,
+} from "@mesh-six/core";
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -677,127 +684,172 @@ export const projectWorkflow: TWorkflow = async function* (
   );
   const maxCycles = input.retryBudget ?? retryBudget.retryBudget;
 
-  let totalPlanCycles = retryBudget.planCyclesUsed;
-  let planApproved = false;
+  // Complexity gate — check if issue is tagged "simple"
+  const gate: ComplexityGateOutput = yield ctx.callActivity(
+    complexityGateActivity,
+    { issueNumber, repoOwner, repoName }
+  );
 
-  while (totalPlanCycles < maxCycles && !planApproved) {
-    totalPlanCycles++;
-    console.log(
-      `[Workflow] Planning cycle ${totalPlanCycles}/${maxCycles} for issue #${issueNumber}`
-    );
+  if (gate.simple) {
+    console.log(`[Workflow] Issue #${issueNumber} is simple, skipping Opus planning`);
+    // Skip planning — architect guidance from INTAKE is the plan
+    yield ctx.callActivity(recordPendingMoveActivity, {
+      projectItemId,
+      toColumn: "In Progress",
+    });
+    yield ctx.callActivity(moveCardActivity, {
+      projectItemId,
+      toColumn: "In Progress",
+    });
+  } else {
+    // Initialize architect actor for this issue
+    const architectActorId = `${repoOwner}/${repoName}/${issueNumber}`;
+    yield ctx.callActivity(initializeArchitectActorActivity, {
+      actorId: architectActorId,
+      issueNumber,
+      repoOwner,
+      repoName,
+      workflowId,
+      projectItemId,
+      issueTitle,
+    });
 
-    // Poll for Claude to post a plan as an issue comment
-    const planResult: PollForPlanOutput = yield ctx.callActivity(
-      pollForPlanActivity,
+    // Start planning session via ImplementerActor
+    const planSession: StartSessionOutput = yield ctx.callActivity(
+      startSessionActivity,
       {
         issueNumber,
         repoOwner,
         repoName,
-        projectItemId,
-        timeoutMinutes: 30,
+        workflowId,
+        implementationPrompt: `Plan the implementation for issue #${issueNumber}: ${issueTitle}\n\nArchitect guidance:\n${architectResult.guidance}`,
+        branch: `issue-${issueNumber}`,
       }
     );
 
-    if (planResult.blocked) {
-      console.log(`[Workflow] Issue #${issueNumber} is blocked during planning`);
+    if (!planSession.ok) {
+      yield ctx.callActivity(moveToFailedActivity, {
+        issueNumber, repoOwner, repoName, projectItemId, workflowId,
+        reason: `Planning session failed to start: ${planSession.error}`,
+      });
+      return { issueNumber, repoOwner, repoName, finalPhase: "FAILED" as WorkflowPhase };
+    }
 
-      // Attempt autonomous resolution before escalating
-      const autoResolve: AttemptAutoResolveOutput = yield ctx.callActivity(
-        attemptAutoResolveActivity,
-        { issueNumber, repoOwner, repoName, workflowPhase: "PLANNING" }
+    // Event-driven planning loop
+    let totalPlanCycles = retryBudget.planCyclesUsed;
+    let planApproved = false;
+
+    while (totalPlanCycles < maxCycles && !planApproved) {
+      totalPlanCycles++;
+      console.log(
+        `[Workflow] Planning cycle ${totalPlanCycles}/${maxCycles} for issue #${issueNumber}`
       );
 
-      if (autoResolve.resolved) {
-        console.log(`[Workflow] Auto-resolved blocked question for issue #${issueNumber}`);
-        yield ctx.callActivity(addCommentActivity, {
-          issueNumber, repoOwner, repoName,
-          body: `**PM Auto-Resolution** (consulted: ${autoResolve.agentsConsulted.join(", ")})\n\n${autoResolve.answer}`,
+      // Wait for external event from SessionMonitor
+      const planEvent: PlanningEventPayload = yield ctx.waitForExternalEvent("planning-event");
+
+      if (planEvent.type === "session-failed") {
+        yield ctx.callActivity(moveToFailedActivity, {
+          issueNumber, repoOwner, repoName, projectItemId, workflowId,
+          reason: `Planning session failed: ${planEvent.error}`,
         });
-      } else {
-        // Escalate with best-guess context
-        const ntfyBody = autoResolve.bestGuess
-          ? `${autoResolve.question}\n\nPM best guess (${autoResolve.agentsConsulted.join("+")}): ${autoResolve.bestGuess}`
-          : autoResolve.question;
-        yield ctx.callActivity(notifyBlockedActivity, {
-          issueNumber, repoOwner, repoName,
-          question: ntfyBody,
-          ntfyTopic: "mesh-six-pm",
-        });
+        return { issueNumber, repoOwner, repoName, finalPhase: "FAILED" as WorkflowPhase };
       }
 
-      yield ctx.waitForExternalEvent("card-unblocked");
-      console.log(`[Workflow] Issue #${issueNumber} unblocked, resuming planning`);
-      continue;
-    }
+      if (planEvent.type === "question-detected") {
+        // Route question through architect actor
+        const archAnswer: ConsultArchitectActorOutput = yield ctx.callActivity(
+          consultArchitectActorActivity,
+          {
+            actorId: architectActorId,
+            questionText: planEvent.questionText,
+            source: "planning",
+          }
+        );
 
-    if (planResult.timedOut) {
-      yield ctx.callActivity(notifyTimeoutActivity, {
-        issueNumber,
-        repoOwner,
-        repoName,
-        phase: "planning",
-        ntfyTopic: "mesh-six-pm",
-      });
-      continue;
-    }
+        if (archAnswer.confident) {
+          // Inject answer back into Claude CLI session
+          yield ctx.callActivity(injectAnswerActivity, {
+            implementerActorId: `${repoOwner}-${repoName}-${issueNumber}`,
+            answerText: archAnswer.answer!,
+          });
+        } else {
+          // Escalate to human via ntfy
+          yield ctx.callActivity(notifyHumanQuestionActivity, {
+            issueNumber, repoOwner, repoName, workflowId,
+            questionText: planEvent.questionText,
+            architectBestGuess: archAnswer.bestGuess,
+          });
 
-    // Review the plan via LLM
-    const planReview: ReviewPlanOutput = yield ctx.callActivity(
-      reviewPlanActivity,
-      {
-        issueNumber,
-        repoOwner,
-        repoName,
-        planContent: planResult.planContent,
+          // Wait for human answer via ntfy reply webhook
+          const humanAnswer: HumanAnswerPayload = yield ctx.waitForExternalEvent("human-answer");
+
+          // Process human answer through architect for Mem0 learning
+          yield ctx.callActivity(processHumanAnswerActivity, {
+            architectActorId,
+            questionText: planEvent.questionText,
+            humanAnswer: humanAnswer.answer,
+          });
+
+          // Inject human answer into Claude CLI session
+          yield ctx.callActivity(injectAnswerActivity, {
+            implementerActorId: `${repoOwner}-${repoName}-${issueNumber}`,
+            answerText: humanAnswer.answer,
+          });
+        }
+
+        // Loop back to wait for next event
+        continue;
       }
-    );
 
-    if (planReview.approved) {
-      planApproved = true;
-      console.log(`[Workflow] Plan approved for issue #${issueNumber}`);
-    } else {
-      // Post feedback so Claude can revise
-      yield ctx.callActivity(addCommentActivity, {
-        issueNumber,
-        repoOwner,
-        repoName,
-        body: `**Plan Review — Revision Needed** (confidence: ${(planReview.confidence * 100).toFixed(0)}%)\n\n${planReview.feedback}`,
-      });
-      yield ctx.callActivity(incrementRetryCycleActivity, {
-        workflowId,
-        phase: "planning",
-        failureReason: planReview.feedback,
-      });
-      console.log(`[Workflow] Plan rejected for issue #${issueNumber}, cycle ${totalPlanCycles}`);
+      if (planEvent.type === "plan-complete") {
+        // Review the plan via LLM
+        const planReview: ReviewPlanOutput = yield ctx.callActivity(
+          reviewPlanActivity,
+          {
+            issueNumber,
+            repoOwner,
+            repoName,
+            planContent: planEvent.planContent,
+          }
+        );
+
+        if (planReview.approved) {
+          planApproved = true;
+          console.log(`[Workflow] Plan approved for issue #${issueNumber}`);
+        } else {
+          yield ctx.callActivity(addCommentActivity, {
+            issueNumber, repoOwner, repoName,
+            body: `**Plan Review — Revision Needed** (confidence: ${(planReview.confidence * 100).toFixed(0)}%)\n\n${planReview.feedback}`,
+          });
+          yield ctx.callActivity(incrementRetryCycleActivity, {
+            workflowId,
+            phase: "planning",
+            failureReason: planReview.feedback,
+          });
+          console.log(`[Workflow] Plan rejected for issue #${issueNumber}, cycle ${totalPlanCycles}`);
+        }
+      }
     }
-  }
 
-  if (!planApproved) {
-    yield ctx.callActivity(moveToFailedActivity, {
-      issueNumber,
-      repoOwner,
-      repoName,
+    if (!planApproved) {
+      yield ctx.callActivity(moveToFailedActivity, {
+        issueNumber, repoOwner, repoName, projectItemId, workflowId,
+        reason: `Plan not approved after ${maxCycles} revision cycles`,
+      });
+      return { issueNumber, repoOwner, repoName, finalPhase: "FAILED" as WorkflowPhase };
+    }
+
+    // Plan approved -> move to In Progress
+    yield ctx.callActivity(recordPendingMoveActivity, {
       projectItemId,
-      workflowId,
-      reason: `Plan not approved after ${maxCycles} revision cycles`,
+      toColumn: "In Progress",
     });
-    return {
-      issueNumber,
-      repoOwner,
-      repoName,
-      finalPhase: "FAILED" as WorkflowPhase,
-    };
+    yield ctx.callActivity(moveCardActivity, {
+      projectItemId,
+      toColumn: "In Progress",
+    });
   }
-
-  // Plan approved -> move to In Progress
-  yield ctx.callActivity(recordPendingMoveActivity, {
-    projectItemId,
-    toColumn: "In Progress",
-  });
-  yield ctx.callActivity(moveCardActivity, {
-    projectItemId,
-    toColumn: "In Progress",
-  });
 
   console.log(`[Workflow] Issue #${issueNumber} moved to In Progress`);
 
