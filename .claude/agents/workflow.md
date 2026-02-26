@@ -39,8 +39,8 @@ Failure paths (loop back):
 
 ## Key Files
 
-- `apps/project-manager/src/index.ts` — Hono server, Dapr pub/sub handlers, MQTT publishing, activity implementations (retry budget DB ops, auto-resolve cascade, workflow state lookups via PostgreSQL)
-- `apps/project-manager/src/workflow.ts` — Dapr Workflow definition, state transitions, retry budget loops, auto-resolve blocked handling
+- `apps/project-manager/src/index.ts` — Hono server, Dapr pub/sub handlers, MQTT publishing, activity implementations (complexity gate, architect actor invocation, implementer session start, answer injection, ntfy notification, retry budget DB ops, workflow state lookups via PostgreSQL), ntfy reply webhook (`/ntfy-reply`)
+- `apps/project-manager/src/workflow.ts` — Dapr Workflow definition, event-driven state transitions via `waitForExternalEvent()`, architect actor question loop, complexity gate routing
 - `packages/core/src/context.ts` — `buildAgentContext()` and `transitionClose()` used by PM
 - `packages/core/src/github.ts` — `GitHubProjectClient` with `TokenBucket` rate limiter
 
@@ -65,12 +65,29 @@ Memory scopes:
 // Activity: a single unit of work within a workflow
 const result = await ctx.callActivity("activityName", input);
 
+// External event: suspend workflow until event raised (primary pattern for phase transitions)
+const event = await ctx.waitForExternalEvent("planning-event");
+// Events raised by SessionMonitor via Dapr HTTP API:
+// POST /v1.0-alpha1/workflows/dapr/{instanceId}/raiseEvent/{eventName}
+
 // Timer: durable delay
 await ctx.createTimer(duration);
 
 // Sub-orchestration: nested workflow
 await ctx.callSubOrchestrator("subWorkflowName", input);
 ```
+
+## Event-Driven Phase Pattern
+
+Each workflow phase (PLANNING, IMPLEMENTATION, QA) follows the same event loop:
+
+1. `callActivity` to initialize resources (architect actor, implementer session)
+2. `waitForExternalEvent(channel)` to suspend — zero resource usage while waiting
+3. SessionMonitor raises typed events when things happen (question detected, completion, failure)
+4. Workflow processes event: questions → architect actor → inject answer or escalate to human via ntfy
+5. Loop back to `waitForExternalEvent` until phase completes or fails
+
+Event channels: `planning-event`, `impl-event`, `qa-event`. Each carries discriminated union payloads (e.g., `{ type: "question-detected", questionText, sessionId }`).
 
 ## Rules
 

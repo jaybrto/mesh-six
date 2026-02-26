@@ -71,7 +71,18 @@ Every agent deployment includes:
 
 - **Pub/sub**: `agent-pubsub` (RabbitMQ, durable queues, publisher confirm, prefetch=1)
 - **State store**: `agent-statestore` (Redis cluster at `redis-cluster.redis:6379`, key prefix `mesh-six:`)
+- **Actor state store**: `statestore-actor-redis` (Redis, scoped to `llm-service` and `architect-agent`) — used by Dapr actor runtime
 - **Resiliency**: Exponential retry for pub/sub, constant retry for state, circuit breaker at 5 failures
+
+## Dapr Actor Annotations
+
+Agents using Dapr Actors (implementer, architect-agent, llm-service) need additional annotations:
+
+```yaml
+dapr.io/actor-types: "ActorTypeName"
+dapr.io/actor-idle-timeout: "60m"
+dapr.io/actor-scan-interval: "30s"
+```
 
 ## Rules
 
