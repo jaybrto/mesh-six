@@ -132,6 +132,11 @@ app.put("/actors/:actorType/:actorId/method/:methodName", async (c) => {
         const result = await actor.startSession(p);
         return c.json(result);
       }
+      case "injectAnswer": {
+        const p = body as Parameters<typeof actor.injectAnswer>[0];
+        const result = await actor.injectAnswer(p);
+        return c.json(result);
+      }
       case "getStatus":
         return c.json(actor.getStatus());
       case "onDeactivate":

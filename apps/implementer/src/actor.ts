@@ -53,6 +53,8 @@ export interface ActorState {
   credentialBundleId?: string;
   status: ImplementationSession["status"];
   startedAt?: string;
+  workflowId?: string;
+  answerInjected?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,7 @@ export class ImplementerActor {
     repoOwner: string;
     repoName: string;
     branch: string;
+    workflowId?: string;
   }): Promise<{ ok: boolean; error?: string }> {
     log(`Activating actor ${this.actorId} for issue #${params.issueNumber}`);
 
@@ -113,6 +116,7 @@ export class ImplementerActor {
       worktreeDir,
       credentialBundleId: bundleId,
       status: "idle",
+      workflowId: params.workflowId,
     };
 
     await insertActivityLog({
@@ -185,6 +189,36 @@ export class ImplementerActor {
    */
   getStatus(): { actorId: string; state: ActorState | null } {
     return { actorId: this.actorId, state: this.state };
+  }
+
+  /**
+   * Inject an answer text into the running Claude CLI session via tmux send-keys.
+   * Called by PM workflow when architect or human provides an answer.
+   */
+  async injectAnswer(params: {
+    answerText: string;
+  }): Promise<{ ok: boolean; error?: string }> {
+    if (!this.state) return { ok: false, error: "Actor not activated" };
+
+    const { tmuxSessionName, sessionId } = this.state;
+    const escapedAnswer = params.answerText.replace(/'/g, "'\\''");
+
+    try {
+      await sendCommand(tmuxSessionName, escapedAnswer);
+      this.state.answerInjected = true;
+
+      await insertActivityLog({
+        sessionId,
+        eventType: "answer_injected",
+        detailsJson: { answer: params.answerText.substring(0, 200) },
+      });
+
+      log(`Answer injected into session ${tmuxSessionName}`);
+      return { ok: true };
+    } catch (err) {
+      log(`Failed to inject answer: ${err}`);
+      return { ok: false, error: String(err) };
+    }
   }
 
   /**
