@@ -84,16 +84,16 @@ These decisions were made through extensive design discussion and should not be 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Primary Language | Bun/TypeScript | Fastest iteration speed, best AI SDK ecosystem, Jay's preference. Go for future performance-critical extractions. |
-| Agent Framework | Vercel AI SDK | Best-in-class LLM interaction (tool calling, streaming, structured output). Multi-provider (Anthropic, OpenAI-compatible/LiteLLM, Ollama). |
+| LLM Module | Custom `@mesh-six/core` llm.ts | Direct LiteLLM HTTP calls via OpenAI-compatible API. `chatCompletion()`, `chatCompletionWithSchema()` (Zod schema → prompt injection), `tracedChatCompletion()` with event logging. Replaced Vercel AI SDK. |
 | Agent Communication | Dapr (service invocation + pub/sub) | Language-agnostic, observability built-in, decouples agents from infrastructure. Already deployed in cluster. |
 | Message Broker | RabbitMQ | Primary messaging infra, HA via operator, quorum queues, MQTT plugin for real-time. Replaces NATS for agent comms. |
-| LLM Gateway | Existing Ollama + LiteLLM | Already running. OpenAI-compatible API for Vercel AI SDK. No changes needed. |
+| LLM Gateway | Existing Ollama + LiteLLM | Already running. OpenAI-compatible API consumed directly via fetch in `@mesh-six/core` llm module. |
 | Memory Layer | Mem0 via `mem0ai` npm package | Direct TypeScript integration. pgvector for vectors, Ollama for embeddings/extraction. No separate container. |
 | Short-term Memory | Redis (via Dapr state store) | Session context, agent working memory. Already running HA. |
 | Long-term Memory | PostgreSQL + pgvector (via Mem0) | Persistent memory, vector similarity search. Already running HA (3-pod). |
 | Agent Discovery | Custom registry in Dapr state store | Lightweight, ~50 lines. Agents self-register with capabilities, health checks, weights. |
 | Agent Scoring | Weighted routing with historical performance | Base weights + dependency health checks + rolling success rate from task history. |
-| Hosting Model | Standalone services (not Dapr Actors) | Simpler to debug and reason about. Migration path to actors preserved. |
+| Hosting Model | Standalone services + Dapr Actors | Most agents are standalone HTTP services. Architect and Implementer use Dapr Actors for per-issue state isolation. LLM Service uses actors for credential-scoped concurrency control. |
 | Failure Handling | Option A — timeout + retry + re-score | Agent timeout → report failure → orchestrator re-scores → dispatch to next agent. No mid-task failover (Milestone 1). |
 | Deployment | ArgoCD + GitOps | All agent manifests in Git. Kustomize for environment overlays. Standard homelab pattern. |
 | Observability | OpenTelemetry → Grafana LGTM stack | Dapr emits traces/metrics automatically. Flows to existing Grafana/Loki/Mimir/Tempo. |
@@ -107,18 +107,20 @@ These decisions were made through extensive design discussion and should not be 
 | Component | Package | Purpose |
 |-----------|---------|---------|
 | Runtime | `bun` (latest) | JavaScript/TypeScript runtime |
-| AI SDK | `ai` + `@ai-sdk/anthropic` + `@ai-sdk/openai` | LLM interaction, tool calling, structured output |
+| LLM Module | `@mesh-six/core` llm.ts | Direct LiteLLM HTTP calls (OpenAI-compatible). `chatCompletion()`, `chatCompletionWithSchema()`, `tracedChatCompletion()` |
 | Dapr Client | `@dapr/dapr` | State, pub/sub, service invocation, bindings |
 | HTTP Server | `Hono` | Lightweight HTTP framework for agent endpoints |
 | Validation | `zod` | Schema validation for structured outputs and messages |
 | Task History | `pg` | Direct PostgreSQL queries for agent scoring (PgBouncer compatible) |
+| GitHub API | `@octokit/rest` + `@octokit/graphql` | GitHub Projects v2, issue management, PR operations |
+| Memory | `mem0ai` | Vector memory storage with pgvector + Ollama embeddings |
 
 ### Infrastructure (Already Running)
 
 | Service | Role in Mesh Six |
 |---------|-------------------|
 | RabbitMQ HA (operator) | Pub/sub backbone, task routing, MQTT events |
-| PostgreSQL HA (3-pod) | Task history, agent scoring data, Mem0 vector storage |
+| PostgreSQL HA (3-pod) | Task history, agent scoring, Mem0 vectors, auth credentials, implementation sessions, architect events, workflow instances, session checkpoints |
 | Redis Cluster | Dapr state store (agent registry, session state) |
 | Ollama + LiteLLM | LLM inference gateway |
 | ArgoCD | GitOps deployment of agent services |
@@ -127,11 +129,11 @@ These decisions were made through extensive design discussion and should not be 
 | Grafana LGTM | Observability (traces, logs, metrics) |
 | Dapr | Sidecar runtime for all agents |
 
-### New Infrastructure (To Deploy)
+### New Infrastructure (Deployed)
 
 | Service | Milestone | Purpose |
 |---------|-----------|---------|
-| pgvector extension | 2 | Vector similarity search in PostgreSQL |
+| pgvector extension | 2 | Vector similarity search in PostgreSQL (v0.7.0, already enabled) |
 
 ---
 
@@ -143,19 +145,23 @@ These decisions were made through extensive design discussion and should not be 
 | Simple Agent | `simple-agent` | Request-response | Pub/sub (receive tasks) | 1 |
 | ArgoCD Deployer | `argocd-deployer` | Request-response | Pub/sub (receive tasks) | 3 |
 | Kubectl Deployer | `kubectl-deployer` | Request-response | Pub/sub (receive tasks) | 3 |
-| Architect | `architect-agent` | Request-response | Service invocation (consulted by PM/orchestrator) | 3 |
+| Architect | `architect-agent` | Dapr Actor (per-issue) | Service invocation + actor methods | 3, 4.5 |
 | Researcher | `researcher-agent` | Request-response | Service invocation (consulted by Architect/PM) | 3 |
 | QA Tester | `qa-tester` | Request-response | Pub/sub (receive tasks) | 3 |
 | API Coder | `api-coder` | Request-response | Pub/sub (receive tasks) | 3 |
 | UI Agent | `ui-agent` | Request-response | Pub/sub (receive tasks) | 3 |
-| Project Manager | `project-manager` | Dapr Workflow (long-running) | Pub/sub + service invocation + workflow | 4 |
+| Project Manager | `project-manager` | Dapr Workflow (long-running) | Pub/sub + service invocation + workflow + external events | 4, 4.5 |
 | Claude MQTT Bridge | `claude-mqtt-bridge` | Infrastructure | MQTT publish (Claude hooks) | 4 |
 | Dashboard | `dashboard` | Web UI | MQTT WebSocket (read-only) | 4 |
-| Context Service | `context-service` | Infrastructure | Service invocation (called by PM workflow) | 6 |
+| Webhook Receiver | `webhook-receiver` | Infrastructure | HTTP webhook + Dapr pub/sub | 4.5 |
+| Auth Service | `auth-service` | Infrastructure | Service invocation (credential provisioning) | 4.5 |
+| Implementer | `implementer` | Dapr Actor StatefulSet | Actor methods + Dapr workflow events | 4.5 |
+| LLM Service | `llm-service` | Dapr Actor | Service invocation (Claude CLI gateway) | 4.5 |
 | Homelab Monitor | `homelab-monitor` | Request-response | Pub/sub (receive tasks) | 5 |
 | Infra Manager | `infra-manager` | Request-response | Pub/sub (receive tasks) | 5 |
 | Cost Tracker | `cost-tracker` | Request-response | Scheduled + on-demand | 5 |
 | Context Service | `context-service` | Infrastructure | Service invocation (called by PM workflow) | 6 |
+| Event Logger | `event-logger` | Infrastructure | Pub/sub subscriber (event tap) | Standalone |
 
 ---
 
@@ -396,25 +402,24 @@ Every agent follows this pattern. This becomes the template that new agents copy
 // packages/agent-template/src/index.ts
 
 import { Hono } from "hono";
-import { DaprClient, DaprServer } from "@dapr/dapr";
-import { generateText, tool } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
+import { DaprClient } from "@dapr/dapr";
 import { z } from "zod";
-import { AgentRegistry, type AgentRegistration } from "@mesh-six/core";
+import {
+  AgentRegistry,
+  tracedChatCompletion,
+  EventLog,
+  DAPR_PUBSUB_NAME,
+  TASK_RESULTS_TOPIC,
+  type AgentRegistration,
+} from "@mesh-six/core";
 
 // --- Configuration ---
 const AGENT_ID = process.env.AGENT_ID || "simple-agent";
 const AGENT_NAME = process.env.AGENT_NAME || "Simple Agent";
 const DAPR_HOST = process.env.DAPR_HOST || "localhost";
 const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
-const LITELLM_BASE_URL = process.env.LITELLM_BASE_URL || "http://litellm.litellm:4000/v1";
+const LLM_MODEL = process.env.LLM_MODEL || "anthropic/claude-sonnet-4-20250514";
 const APP_PORT = process.env.APP_PORT || "3000";
-
-// --- LLM Provider (LiteLLM exposes OpenAI-compatible API) ---
-const llm = createOpenAI({
-  baseURL: LITELLM_BASE_URL,
-  apiKey: process.env.LITELLM_API_KEY || "sk-local",
-});
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
@@ -463,7 +468,7 @@ app.post("/tasks", async (c) => {
     const result = await handleTask(task);
 
     // Publish result back to orchestrator
-    await daprClient.pubsub.publish("agent-pubsub", "task-results", result);
+    await daprClient.pubsub.publish(DAPR_PUBSUB_NAME, TASK_RESULTS_TOPIC, result);
 
     return c.json({ status: "SUCCESS" });
   } catch (error) {
@@ -475,7 +480,7 @@ app.post("/tasks", async (c) => {
       durationMs: 0,
       completedAt: new Date().toISOString(),
     };
-    await daprClient.pubsub.publish("agent-pubsub", "task-results", failResult);
+    await daprClient.pubsub.publish(DAPR_PUBSUB_NAME, TASK_RESULTS_TOPIC, failResult);
     return c.json({ status: "SUCCESS" }); // ACK to Dapr even on failure
   }
 });
@@ -491,12 +496,14 @@ app.post("/invoke", async (c) => {
 async function handleTask(task: any) {
   const startTime = Date.now();
 
-  const { text } = await generateText({
-    model: llm("anthropic/claude-sonnet-4-20250514"), // via LiteLLM
-    system: SYSTEM_PROMPT,
-    prompt: task.payload.query || JSON.stringify(task.payload),
-    // tools: { ... } // Add agent-specific tools here
-  });
+  const { text } = await tracedChatCompletion(
+    {
+      model: LLM_MODEL,         // e.g. "anthropic/claude-sonnet-4-20250514" via LiteLLM
+      system: SYSTEM_PROMPT,
+      prompt: task.payload.query || JSON.stringify(task.payload),
+    },
+    eventLog ? { eventLog, traceId: crypto.randomUUID(), agentId: AGENT_ID } : null
+  );
 
   return {
     taskId: task.id,
@@ -918,16 +925,23 @@ The mem0ai package significantly increases bundle size (~11MB for simple-agent).
 ### 3.3 — Architect Agent
 
 **Capabilities**: `tech-consultation`, `architecture-review`
-**Communication**: Synchronous via Dapr service invocation (consulted by PM and orchestrator)
+**Communication**: Synchronous via Dapr service invocation (consulted by PM and orchestrator). Also operates as a **Dapr Actor** (`ArchitectActor`) with per-issue instances for the GWA integration workflow.
 **System Prompt**: Encodes Jay's homelab knowledge, tech preferences, and decision patterns
-**Memory**: Long-term via Mem0 (past architectural decisions and outcomes)
+**Memory**: Long-term via Mem0 (past architectural decisions and outcomes). Actor instances maintain an append-only event log in PostgreSQL (`architect_events`).
 **Tools**:
 - `query_cluster_state` — Current k8s resource usage and running services
 - `query_service_health` — Grafana/Prometheus metrics for services
 - `query_past_decisions` — Search Mem0 for architectural history
 - `query_resource_usage` — Cluster capacity and consumption
 
-**Key behavior**: Returns structured output with tech stack recommendation, deployment strategy, and reasoning. Reasoning is stored in memory for future reference.
+**Actor methods** (per-issue instances):
+- `initialize` — Set up actor with issue context
+- `consult` — Answer architectural questions with full event history context
+- `answerQuestion` — Evaluate question confidence, return answer or best-guess for escalation
+- `receiveHumanAnswer` — Generalize human Q&A via LLM, store to Mem0 for cross-issue learning
+- `getHistory` — Retrieve event log for an issue
+
+**Key behavior**: Returns structured output with tech stack recommendation, deployment strategy, and reasoning. Reasoning is stored in memory for future reference. In actor mode, builds context from accumulated event history + Mem0 memories to provide increasingly informed answers per issue.
 
 ### 3.4 — Researcher Agent
 
@@ -972,7 +986,7 @@ Scenario validation — ArgoCD outage:
 **Completed: 2026-02-11**
 
 **Architect Agent:**
-- Two-step structured output: tools gather context, then generateObject creates recommendation
+- Two-step structured output: tools gather context via `tracedChatCompletion`, then `chatCompletionWithSchema` creates recommendation
 - System prompt encodes homelab knowledge and Jay's preferences
 - Tools: query_cluster_state, query_service_health, query_past_decisions, query_resource_usage
 - Memory integration for storing/retrieving architectural decisions
@@ -1080,7 +1094,7 @@ PM receives task "Build a notification service"
 
 At PLANNING → REVIEW transition:
 - Agent polls project board for Claude Code's implementation plan
-- Uses Vercel AI SDK structured output to evaluate plan against requirements
+- Uses `chatCompletionWithSchema` structured output to evaluate plan against requirements
 - Returns verdict: `{ approved: boolean, concerns: string[], suggestions: string[] }`
 
 At QA → DEPLOY transition:
@@ -1092,14 +1106,14 @@ At VALIDATE → ACCEPTED transition:
 - Runs smoke tests against live URLs
 - Evaluates health and functionality
 
-### 4.5 — Integration with Existing `github-workflow-agents`
+### 4.5 — Integration with GitHub Workflow Agents (GWA)
 
-**Option 1 (chosen)**: Wrap existing system. PM agent manipulates project boards which trigger existing Claude Code workflows in k3s pods. Current system remains untouched.
+**Approach (evolved)**: GWA functionality has been fully migrated into mesh-six as native services. The PM agent drives the workflow via GitHub Projects board as the integration surface, while the Implementer agent runs Claude CLI sessions directly. See [Milestone 4.5](#milestone-45--gwa-integration-pm-agent--github-workflow-agents) for the full implementation.
 
-Each repo pod has its own PVC storing:
-- Git repository (with worktree support for concurrent tasks)
-- SQLite database for activity tracking
-- Crash recovery state for resuming interrupted work
+Key services migrated from GWA:
+- **Auth Service** (`auth-service`) — Credential lifecycle management (replaces GWA orchestrator for auth)
+- **Implementer** (`implementer`) — Claude CLI in tmux sessions (replaces GWA repo pods)
+- **LLM Service** (`llm-service`) — Claude CLI gateway with actor-based concurrency control
 
 ### 4.6 — MQTT Progress Events
 
@@ -1206,13 +1220,13 @@ PM agent subscribes for real-time monitoring. Same events feed eventual dashboar
 
 ## Milestone 4.5 — GWA Integration (PM Agent ↔ GitHub Workflow Agents)
 
-**Goal**: Integrate the PM agent with GitHub Workflow Agents (GWA) using GitHub Projects board as the sole integration surface. PM moves cards through columns, GWA reacts via its own webhook. Zero coupling to GWA internals.
+**Goal**: Fully migrate GitHub Workflow Agents (GWA) functionality into mesh-six as native services. The PM agent drives autonomous code implementation workflows via GitHub Projects board, with credential management, Claude CLI execution, architect consultation, and session recovery all handled natively.
 
-**Status**: Code complete (Phases 1-3). E2E test app and infrastructure deployment deferred to follow-up sessions.
+**Status**: Code complete (all phases). Infrastructure deployment and E2E testing deferred to follow-up sessions.
 
-**Key Design Principle**: GitHub Projects is the ONLY integration surface. If GWA were replaced with a human, PM would function identically.
+**Key Design Principle**: GitHub Projects is the ONLY integration surface. If the Implementer were replaced with a human developer, PM would function identically — it only interacts via GitHub issue comments and project board column moves.
 
-### New Service: Webhook Receiver (`apps/webhook-receiver/`)
+### New Service: Webhook Receiver (`apps/webhook-receiver/` v0.2.0)
 
 Board event bridge that detects GitHub Projects column changes and publishes typed events:
 - HMAC-SHA256 webhook validation for `projects_v2_item` events
@@ -1220,30 +1234,126 @@ Board event bridge that detects GitHub Projects column changes and publishes typ
 - Publishes to Dapr `board-events` topic
 - 3-minute polling safety net for missed Todo items
 - Self-move filtering via Dapr state store pending-moves keys
+- PR/issue filtering via `shouldProcessIssue` from `@mesh-six/core` (author, label, branch, draft filters)
 
-### PM Workflow Rewrite
+### New Service: Auth Service (`apps/auth-service/` v0.1.0)
 
-Board-driven Dapr Workflow replacing the M4 state machine:
-- States: INTAKE → PLANNING → IMPLEMENTATION → QA → REVIEW → ACCEPTED/FAILED
-- 18 activities covering the full lifecycle (consult architect, enrich issue, move card, poll for plan/implementation/tests, review plan, evaluate tests, validate deployment, notify blocked/timeout, create bug issues)
-- GitHub API polling with 15-second intervals for rate-limit-friendly phase detection
-- Bounded retry loops (max 3 plan cycles, max 3 QA cycles)
-- Blocked state handling via external events + ntfy.sh notifications
-- `pm_workflow_instances` PostgreSQL table for issue↔workflow mapping
+Credential lifecycle management microservice (replaces GWA orchestrator for auth):
+- Project CRUD: `POST /projects`, `GET /projects/:id`, `PUT /projects/:id`
+- Credential management: push, refresh, health check, invalidation
+- Bundle provisioning: `POST /projects/:id/provision` → tar.gz with `.credentials.json`, `config.json`, `settings.json`, `.claude.json`
+- OAuth refresh timer: auto-refreshes expiring credentials every 30 minutes
+- Dapr pub/sub: publishes `credential-refreshed` and `config-updated` events
+- PostgreSQL-backed: `auth_projects`, `auth_credentials`, `auth_bundles` tables
 
-### Core Library Additions
+### New Agent: Implementer (`apps/implementer/` v0.3.0)
 
-- `GitHubProjectClient` class for shared GitHub Projects v2 GraphQL + REST operations
+Autonomous code implementation agent (replaces GWA repo pods):
+- **Dapr Actor runtime**: one `ImplementerActor` per issue session
+- **Session lifecycle**: provision credentials → clone repo → create worktree → start Claude CLI in tmux → monitor → report
+- **tmux session management**: create/send-keys/capture-pane/kill via `Bun.spawn`
+- **SessionMonitor**: periodic tmux capture, detects auth failures, questions, completion, Claude session IDs
+- **Event-driven**: SessionMonitor raises typed events on PM workflow via Dapr HTTP `raiseEvent` API (not pub/sub)
+- **Answer injection**: `injectAnswer` method sends text to Claude CLI via `tmux send-keys`
+- **Session resume**: captures `claude_session_id` from CLI output, passes `--resume <id>` on restart
+- **Pre-action checkpoints**: snapshots git state + tmux output before commits/PRs
+- **Pod startup recovery**: marks interrupted sessions, finds resumable sessions
+- **GitHub integration**: PR creation via `gh` CLI, structured comment posting
+- **StatefulSet** deployment with PVCs for worktrees and tmux sockets
+- **Custom Dockerfile**: `Dockerfile.implementer` with tmux + git + Claude CLI
+
+### New Service: LLM Service (`apps/llm-service/` v0.1.1)
+
+Claude CLI gateway with actor-based concurrency control:
+- OpenAI-compatible `/v1/chat/completions` endpoint
+- Dapr actor runtime: `ClaudeCLIActor` type, one actor per credential set, turn-based concurrency
+- MinIO credential management: download/extract tar.gz archives on actor activation
+- Capability-aware routing: LRU selection among idle actors
+- Provisions credentials from auth-service via Dapr service invocation (replaced GWA dependency)
+- Subscribes to `credential-refreshed` events for proactive credential sync
+- Custom Dockerfile: `Dockerfile.llm-service` with Claude CLI pre-installed
+
+### PM Workflow Rewrite (`apps/project-manager/` v0.6.0)
+
+Event-driven Dapr Workflow with full lifecycle management:
+- **States**: INTAKE → PLANNING → IMPLEMENTATION → QA → REVIEW → ACCEPTED/FAILED
+- **Event-driven phases**: each phase uses `waitForExternalEvent()` to suspend until SessionMonitor/subsystems raise typed events (`planning-event`, `impl-event`, `qa-event`, `human-answer`)
+- **Complexity gate**: issues labeled `simple` skip Opus planning phase
+- **Architect actor question loop**: questions routed through `ArchitectActor.answerQuestion()`, confident answers auto-injected into Claude CLI, low-confidence escalated to human via ntfy with reply webhook (`/ntfy-reply`)
+- **Human answer flow**: ntfy reply → `raiseEvent("human-answer")` → `processHumanAnswer` → Mem0 learning
+- **DB-backed retry budgets**: configurable per-issue via `retryBudget` workflow input, failure reasons tracked as JSONB
+- **GitHub issue comments**: status updates at each phase transition with hidden HTML markers for idempotent updates
+- **Plan templates**: `templates/plans/prompt.md` for planning prompt construction, `formatPlanForIssue` for plan sync
+- **No in-memory state**: all lookups via PostgreSQL (`lookupByIssue`, `lookupByWorkflowId`)
+- **Auto-resolve**: two-agent cascade (architect → researcher) for blocked questions before human escalation
+- **Poll jitter**: 0-5s random jitter prevents synchronized polling from concurrent workflows
+
+### Architect Agent Enhancement (`apps/architect-agent/` — ArchitectActor)
+
+Per-issue Dapr Actor with append-only event log:
+- `ArchitectActor` class with methods: `initialize`, `consult`, `answerQuestion`, `receiveHumanAnswer`, `getHistory`
+- PostgreSQL event log (`architect_events` table) with `actor_id`, `event_type`, JSONB payload
+- Mem0 integration: generalizes human Q&A and stores to global `architect` scope for cross-issue learning
+- Confidence-based responses: `{ confident: true, answer }` or `{ confident: false, bestGuess }`
+- Actor runtime wired into existing Hono service alongside traditional consultation endpoints
+
+### Core Library Additions (`@mesh-six/core` v0.9.0)
+
+- `GitHubProjectClient` — GitHub Projects v2 GraphQL + REST operations with `TokenBucket` rate limiter (50 burst, 80/min refill)
 - `BoardEvent` Zod discriminated union for typed board events
-- `@octokit/graphql` and `@octokit/rest` dependencies
+- `credentials.ts` — `isCredentialExpired`, `syncEphemeralConfig`, `buildCredentialsJson`, `buildConfigJson`, `buildSettingsJson`
+- `dialog-handler.ts` — Claude CLI dialog detection: `matchKnownDialog`, `parseDialogResponse`, `KNOWN_DIALOGS`
+- `git.ts` — Typed git operations: `cloneRepo`, `createWorktree`, `removeWorktree`, `getStatus`, `getDiff`, `createBranch`, `GitError`
+- `pr-filter.ts` — PR/issue filtering: `shouldProcessIssue`, `shouldProcessPR`, `loadFilterConfigFromEnv`
+- `comment-generator.ts` — LLM-powered GitHub comment generation: `generateComment`, `formatStatusComment`
+- `architect-actor.ts` — `ArchitectActorStateSchema`, `ArchitectEventSchema`, typed event payloads
+- Auth/session types: `ProjectConfigSchema`, `CredentialPushRequestSchema`, `ImplementationSessionSchema`, `SessionQuestionSchema`
 
-### Remaining Work
+### Database Migrations
 
-- Deploy webhook-receiver + updated PM to k8s cluster
-- Configure Cloudflare tunnel, GitHub webhook, secrets
-- Create `bto-labs/gwa-test-app` test fixture repo
-- Write E2E test (`tests/e2e/full-lifecycle.test.ts`)
-- Run full lifecycle: Todo → Planning → In Progress → QA → Review → Done
+- `004_pm_workflow_instances.sql` — Issue↔workflow mapping with unique constraint on (issue, repo)
+- `006_auth_tables.sql` — `auth_projects`, `auth_credentials`, `auth_bundles`
+- `007_session_tables.sql` — `implementation_sessions`, `session_prompts`, `session_tool_calls`, `session_activity_log`, `session_questions`
+- `008_pm_retry_budget.sql` — Retry budget columns on `pm_workflow_instances`
+- `009_architect_events.sql` — `architect_events` append-only log
+- `010_session_resume_fields.sql` — `claude_session_id`, `session_checkpoints` table
+
+### Operational Infrastructure
+
+**Scripts** (`scripts/`):
+- `push-credentials.ts` — Push local Claude credentials to auth-service
+- `cleanup.ts` — Remove stale sessions, old checkpoints, expired bundles
+- `credential-backup.ts` — Backup credentials to MinIO
+- `credential-history.ts` — Credential expiry status report
+- `debug-db.ts` — Database diagnostics (active workflows, sessions, pending questions)
+- `onboard-repo.ts` — Register repo + create GitHub Projects v2 with standard columns/fields
+- `setup-project.ts` — One-time auth project setup
+
+**K8s CronJobs**:
+- `cleanup-cronjob` — Daily 3am: `scripts/cleanup.ts` with 7-day session retention, 30-day log retention
+- `credential-backup-cronjob` — Every 6h: `scripts/credential-backup.ts`
+
+### Milestone 4.5 Acceptance Criteria
+
+- [x] Webhook receiver validates HMAC-SHA256 and classifies board events
+- [x] PM workflow uses event-driven phases with `waitForExternalEvent()`
+- [x] Auth-service manages credential lifecycle (push, refresh, provision)
+- [x] Implementer runs Claude CLI in tmux with session monitoring
+- [x] SessionMonitor raises typed events on PM workflow via Dapr `raiseEvent`
+- [x] Architect actor provides per-issue consultation with confidence scoring
+- [x] Human answer flow via ntfy reply webhook
+- [x] DB-backed retry budgets replace hardcoded cycle limits
+- [x] Session resume via `claude --resume <session_id>`
+- [x] Pre-action checkpoints capture git state before commits
+- [x] Pod startup recovery marks interrupted sessions
+- [x] GitHub issue comments at each phase transition
+- [x] Planning templates loaded from `templates/plans/`
+- [x] PR/issue filtering on webhook-receiver
+- [x] Operational scripts for cleanup, backup, diagnostics
+- [x] K8s CronJobs for automated cleanup and backup
+- [ ] Deploy all M4.5 services to k8s cluster
+- [ ] Configure Cloudflare tunnel, GitHub webhook, secrets
+- [ ] Run full lifecycle E2E test
 
 Full architecture and acceptance criteria in `docs/PLAN_45_GWA.md`.
 
@@ -1599,13 +1709,13 @@ export class EventLog {
 }
 ```
 
-### Traced LLM Wrapper: `ai.ts`
+### Traced LLM Wrapper: `llm.ts`
 
 ```typescript
-// packages/core/src/ai.ts
-// Wraps Vercel AI SDK generateText with automatic event logging
+// packages/core/src/llm.ts
+// Direct LiteLLM HTTP calls with automatic event logging
+// Replaced Vercel AI SDK — uses OpenAI-compatible chat/completions endpoint
 
-import { generateText, type GenerateTextResult } from "ai";
 import type { EventLog } from "./events";
 
 interface TraceContext {
@@ -1616,45 +1726,35 @@ interface TraceContext {
   logFullPayload?: boolean;  // Default false — opt in for debugging
 }
 
-export async function tracedGenerateText(
-  opts: Parameters<typeof generateText>[0],
-  ctx: TraceContext
-): Promise<GenerateTextResult<any>> {
-  const startTime = Date.now();
+// Core chat completion — direct fetch to LiteLLM
+export async function chatCompletion(opts: {
+  model: string;
+  system?: string;
+  prompt: string;
+  messages?: Array<{ role: string; content: string }>;
+}): Promise<{ text: string }> {
+  // Builds messages array from system + prompt, POSTs to LiteLLM /chat/completions
+  // Returns { text } extracted from response.choices[0].message.content
+}
 
-  await ctx.eventLog.emit({
-    traceId: ctx.traceId,
-    taskId: ctx.taskId,
-    agentId: ctx.agentId,
-    eventType: "llm.call",
-    aggregateId: ctx.taskId ? `task:${ctx.taskId}` : undefined,
-    payload: {
-      model: String(opts.model),
-      systemPromptLength: opts.system?.length ?? 0,
-      promptLength: typeof opts.prompt === "string" ? opts.prompt.length : 0,
-      toolCount: opts.tools ? Object.keys(opts.tools).length : 0,
-      ...(ctx.logFullPayload ? { system: opts.system, prompt: opts.prompt } : {}),
-    },
-  });
+// Structured output via Zod schema → prompt injection
+export async function chatCompletionWithSchema<S extends z.ZodTypeAny>(opts: {
+  model: string;
+  schema: S;
+  system?: string;
+  prompt: string;
+}): Promise<{ object: z.infer<S> }> {
+  // Injects JSON schema description into prompt, parses response as JSON,
+  // validates against Zod schema. Retries on parse failure.
+}
 
-  const result = await generateText(opts);
-
-  await ctx.eventLog.emit({
-    traceId: ctx.traceId,
-    taskId: ctx.taskId,
-    agentId: ctx.agentId,
-    eventType: "llm.response",
-    aggregateId: ctx.taskId ? `task:${ctx.taskId}` : undefined,
-    payload: {
-      durationMs: Date.now() - startTime,
-      responseLength: result.text.length,
-      toolCallCount: result.toolCalls?.length ?? 0,
-      finishReason: result.finishReason,
-      ...(ctx.logFullPayload ? { response: result.text } : {}),
-    },
-  });
-
-  return result;
+// Traced version — wraps chatCompletion with EventLog emission
+export async function tracedChatCompletion(
+  opts: { model: string; system?: string; prompt: string },
+  ctx: TraceContext | null  // null = skip tracing (graceful degradation)
+): Promise<{ text: string }> {
+  // Emits llm.call event before, llm.response event after
+  // Falls back to plain chatCompletion if ctx is null
 }
 ```
 
@@ -1682,7 +1782,7 @@ events to the log. Deployed as a standalone pod with a Dapr sidecar.
 
 When agents adopt the event log:
 
-1. Replace `generateText()` calls with `tracedGenerateText()` from `@mesh-six/core/ai`
+1. Replace `chatCompletion()` calls with `tracedChatCompletion()` from `@mesh-six/core`
 2. Add `EventLog` instance alongside existing `AgentRegistry` and `AgentScorer` in agent setup
 3. Generate a `traceId` (UUID) at task receipt, thread it through all operations
 4. The `event-logger` service handles pub/sub events with no agent code changes
@@ -1710,10 +1810,10 @@ dispatched → result.
 - [x] `mesh_six_events` table created with monthly partitions
 - [x] Partition auto-creation script/cron (creates 3 months ahead)
 - [x] `EventLog` class in `@mesh-six/core` with emit, emitBatch, query, replay
-- [x] `tracedGenerateText` wrapper in `@mesh-six/core/ai`
+- [x] `tracedChatCompletion` wrapper in `@mesh-six/core` llm.ts
 - [x] `event-logger` service deployed, subscribing to all pub/sub topics
 - [x] Events queryable by trace_id, task_id, agent_id, event_type, time range
-- [x] Existing agents migrated from `generateText` to `tracedGenerateText`
+- [x] Existing agents migrated to `tracedChatCompletion` from `@mesh-six/core`
 - [ ] Events visible in Grafana (Loki or direct PostgreSQL datasource)
 
 ---
@@ -1894,10 +1994,10 @@ export interface TransitionCloseConfig {
 export async function transitionClose(
   config: TransitionCloseConfig,
   memory: AgentMemory,
-  llm: any // Vercel AI SDK model instance
+  model: string // LLM model name for chatCompletionWithSchema
 ): Promise<void> {
-  const { object } = await generateObject({
-    model: llm,
+  const { object } = await chatCompletionWithSchema({
+    model,
     schema: z.object({
       memories: z.array(z.object({
         content: z.string(),
@@ -1908,8 +2008,6 @@ export async function transitionClose(
              Transition: ${config.transitionFrom} → ${config.transitionTo}
              Task ID: ${config.taskId}`,
     prompt: REFLECTION_PROMPT,
-    // Include abbreviated conversation history for reflection
-    messages: config.conversationHistory.slice(-6), // Last 6 messages max
   });
 
   // Store each reflection with appropriate scoping
@@ -1953,18 +2051,25 @@ Example: PM reflects "Go services in this cluster use /healthz not /health" → 
 ```
 mesh-six/
 ├── packages/
-│   └── core/                    # @mesh-six/core shared library
+│   └── core/                    # @mesh-six/core shared library (v0.9.0)
 │       ├── src/
-│       │   ├── types.ts         # Shared type definitions (Zod schemas)
+│       │   ├── types.ts         # Shared type definitions (Zod schemas) — agent, task, auth, session, board event types
 │       │   ├── registry.ts      # Agent registry (Dapr state)
 │       │   ├── scoring.ts       # Agent scoring logic
+│       │   ├── llm.ts           # LLM module — chatCompletion, chatCompletionWithSchema, tracedChatCompletion (direct LiteLLM HTTP)
 │       │   ├── context.ts       # Context builder + reflect-before-reset
 │       │   ├── compression.ts   # Compression request/response types (M6)
 │       │   ├── events.ts        # Immutable event log (append-only)
-│       │   ├── ai.ts            # Traced LLM wrappers (generateText + event logging)
 │       │   ├── memory.ts        # Mem0 client wrapper
+│       │   ├── github.ts        # GitHubProjectClient — Projects v2 GraphQL + REST, token bucket rate limiter
+│       │   ├── credentials.ts   # Credential utilities (expiry check, config builders)
+│       │   ├── dialog-handler.ts # Claude CLI dialog detection and handling
+│       │   ├── git.ts           # Typed git operations (clone, worktree, diff, status)
+│       │   ├── pr-filter.ts     # PR/issue filtering (author, label, branch, draft)
+│       │   ├── comment-generator.ts # LLM-powered GitHub comment generation
+│       │   ├── architect-actor.ts # ArchitectActor types and event schemas
 │       │   └── index.ts         # Public exports
-│       ├── __tests__/           # 70 tests, 135 assertions
+│       ├── __tests__/           # Test suite
 │       ├── package.json
 │       └── tsconfig.json
 ├── apps/
@@ -1972,36 +2077,59 @@ mesh-six/
 │   ├── simple-agent/            # Milestone 1 proof of concept
 │   ├── argocd-deployer/         # Milestone 3 - GitOps deployer
 │   ├── kubectl-deployer/        # Milestone 3 - Direct k8s deployer
-│   ├── architect-agent/         # Milestone 3 - Tech consultation
+│   ├── architect-agent/         # Milestone 3/4.5 - Tech consultation + Dapr Actor
 │   ├── researcher-agent/        # Milestone 3 - Multi-provider research
 │   ├── qa-tester/               # Milestone 3 - QA & test automation
 │   ├── api-coder/               # Milestone 3 - Backend API development
 │   ├── ui-agent/                # Milestone 3 - Frontend UI development
-│   ├── project-manager/         # Milestone 4 - Project lifecycle + Dapr Workflow
-│   ├── claude-mqtt-bridge/      # Milestone 4 - Claude Code hooks → MQTT
-│   ├── dashboard/               # Milestone 4 - React + Vite real-time monitoring UI
-│   ├── context-service/         # Milestone 6 - Context compression proxy
+│   ├── project-manager/         # Milestone 4/4.5 - Event-driven Dapr Workflow
+│   ├── claude-mqtt-bridge/      # Milestone 4 - Claude Code hooks → MQTT + SQLite
+│   ├── dashboard/               # Milestone 4 - React 19 + Vite + Tailwind 4 monitoring UI
+│   ├── webhook-receiver/        # Milestone 4.5 - GitHub Projects webhook bridge
+│   ├── auth-service/            # Milestone 4.5 - Credential lifecycle management
+│   ├── implementer/             # Milestone 4.5 - Claude CLI in tmux (Dapr Actor StatefulSet)
+│   ├── llm-service/             # Milestone 4.5 - Claude CLI gateway (Dapr Actor)
 │   ├── homelab-monitor/         # Milestone 5 - Cluster health + log analysis
 │   ├── infra-manager/           # Milestone 5 - DNS, firewall, proxy management
 │   ├── cost-tracker/            # Milestone 5 - LLM spend + resource tracking
-│   ├── context-service/         # Milestone 6 - Context compression proxy (rules + LLM fallback)
+│   ├── context-service/         # Milestone 6 - Context compression proxy
 │   └── event-logger/            # Standalone — pub/sub event tap
+├── templates/
+│   └── plans/                   # Planning phase templates (plan.md, prompt.md, checklist.md, decisions.md)
+├── scripts/
+│   ├── migrate.ts               # Database migration runner
+│   ├── push-credentials.ts      # Push local Claude credentials to auth-service
+│   ├── cleanup.ts               # Stale session/checkpoint cleanup (CronJob)
+│   ├── credential-backup.ts     # Credential backup to MinIO (CronJob)
+│   ├── credential-history.ts    # Credential audit trail report
+│   ├── debug-db.ts              # Database diagnostics
+│   ├── onboard-repo.ts          # Register repo in repo_registry + setup GitHub Project
+│   └── setup-project.ts         # One-time auth project setup
 ├── docs/
+│   ├── PLAN.md                  # This document — architecture and milestones
+│   ├── PLAN_45_GWA.md           # Detailed GWA integration plan
 │   └── CLAUDE_PROGRESS_UI.md    # Guide for building Claude progress UIs
 ├── dapr/
-│   └── components/
+│   └── components/              # Local dev copies (authoritative configs in k8s/base/dapr-components/)
 │       ├── statestore-redis.yaml
 │       ├── pubsub-rabbitmq.yaml
 │       ├── outbox-postgresql.yaml
 │       └── resiliency.yaml
 ├── k8s/
-│   ├── base/                    # Base kustomize manifests (15 services)
+│   ├── base/                    # Base kustomize manifests (~25 service directories)
 │   │   ├── namespace.yaml
 │   │   ├── kustomization.yaml
+│   │   ├── secrets.yaml
+│   │   ├── vault-external-secrets.yaml
+│   │   ├── dapr-components/     # Authoritative Dapr component configs
 │   │   ├── simple-agent/
 │   │   ├── orchestrator/
-│   │   ├── claude-mqtt-bridge/
-│   │   ├── dashboard/
+│   │   ├── auth-service/
+│   │   ├── implementer/         # StatefulSet with PVCs
+│   │   ├── llm-service/
+│   │   ├── webhook-receiver/    # Includes Ingress for GitHub webhooks
+│   │   ├── cleanup-cronjob/     # Daily 3am cleanup
+│   │   ├── credential-backup-cronjob/  # Every 6h credential backup
 │   │   └── ...per-agent/
 │   └── overlays/
 │       ├── dev/                 # Local development overrides
@@ -2010,12 +2138,23 @@ mesh-six/
 │   ├── 001_agent_task_history.sql
 │   ├── 002_repo_registry.sql
 │   ├── 003_mesh_six_events.sql
-│   └── 004_context_compression_log.sql
+│   ├── 004_pm_workflow_instances.sql
+│   ├── 005_context_compression_log.sql
+│   ├── 006_auth_tables.sql
+│   ├── 007_session_tables.sql
+│   ├── 008_pm_retry_budget.sql
+│   ├── 009_architect_events.sql
+│   └── 010_session_resume_fields.sql
 ├── docker/
-│   └── Dockerfile.agent         # Shared Dockerfile for Bun agents
+│   ├── Dockerfile.agent         # Shared Dockerfile for Bun agents
+│   ├── Dockerfile.implementer   # Custom: Bun + tmux + git + Claude CLI
+│   ├── Dockerfile.llm-service   # Custom: Bun + Claude CLI
+│   ├── Dockerfile.dashboard     # Vite SPA + nginx
+│   └── Dockerfile.claude-agent  # Claude CLI agent image
 ├── .github/
 │   └── workflows/
-│       └── build-deploy.yaml    # CI/CD for agent images
+│       ├── build-deploy.yaml    # CI/CD: Kaniko matrix build on self-hosted runner
+│       └── test.yaml            # PR validation: typecheck + core tests
 ├── bunfig.toml
 ├── package.json                 # Workspace root
 └── README.md
@@ -2028,10 +2167,11 @@ mesh-six/
 ### GitOps Flow
 
 1. Code changes pushed to `mesh-six` repository
-2. GitHub Actions builds container images, pushes to `registry.bto.bar`
-3. Image tag updated in kustomize overlay
-4. ArgoCD detects change, syncs to k3s cluster
-5. Dapr sidecar injector automatically attaches sidecars to new pods
+2. GitHub Actions triggers Kaniko builds on self-hosted k3s runner (matrix per agent, change detection)
+3. Images pushed to internal Gitea registry (`gitea-http.gitea-system.svc.cluster.local:3000/jaybrto/mesh-six-{agent}`)
+4. Tags: `:latest` and `:{sha}` per agent
+5. ArgoCD Application (`k8s/argocd-application.yaml`) detects change, syncs to k3s cluster with automated prune + selfHeal
+6. Dapr sidecar injector automatically attaches sidecars to new pods
 
 ### Bun Workspace
 
@@ -2047,12 +2187,12 @@ The repository uses Bun workspaces so all packages share dependencies and the co
 }
 ```
 
-### Container Image
+### Container Images
 
-Single Dockerfile for all Bun agents, parameterized by build arg:
+Primary Dockerfile for most Bun agents, parameterized by build arg. Specialized agents use custom Dockerfiles.
 
 ```dockerfile
-# docker/Dockerfile.agent
+# docker/Dockerfile.agent — shared by most agents
 FROM oven/bun:latest AS builder
 WORKDIR /app
 COPY . .
@@ -2066,6 +2206,14 @@ COPY --from=builder /app/dist .
 EXPOSE 3000
 CMD ["bun", "run", "index.js"]
 ```
+
+Additional Dockerfiles:
+- `Dockerfile.implementer` — Bun + tmux + git + Claude CLI (for implementer StatefulSet)
+- `Dockerfile.llm-service` — Bun + Claude CLI (for llm-service actor runtime)
+- `Dockerfile.dashboard` — Vite build + nginx static server
+- `Dockerfile.claude-agent` — Claude CLI agent base image
+
+Container registry: `registry.bto.bar/jaybrto/mesh-six-{agent-name}` (Gitea via external Caddy proxy for pull; CI pushes to internal `gitea-http.gitea-system.svc.cluster.local:3000`). Vault + External Secrets Operator syncs secrets from `secret/data/mesh-six`.
 
 ---
 
@@ -2092,4 +2240,4 @@ Milestones are designed to be completed in order. Each builds on the infrastruct
 
 *Document created: February 10, 2026*
 *Architecture designed through iterative discussion between Jay and Claude*
-*Last updated: v1.4 — added Milestone 6 (Context Service), updated context window management model*
+*Last updated: v1.5 — GWA migration (M4.5 expansion), replaced Vercel AI SDK with direct LiteLLM module, added auth-service/implementer/llm-service/webhook-receiver, updated repository structure and deployment strategy*

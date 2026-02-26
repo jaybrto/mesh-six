@@ -45,7 +45,7 @@ mesh-six/
 - **Runtime:** [Bun](https://bun.sh/)
 - **Language:** TypeScript
 - **Communication:** [Dapr](https://dapr.io/) (Pub/Sub via RabbitMQ, State via Redis/Postgres)
-- **AI/LLM:** [Vercel AI SDK](https://sdk.vercel.ai/), [LiteLLM](https://docs.litellm.ai/) (Gateway), [Ollama](https://ollama.com/) (Local models)
+- **AI/LLM:** Custom `@mesh-six/core` llm module (direct LiteLLM HTTP), [LiteLLM](https://docs.litellm.ai/) (Gateway), [Ollama](https://ollama.com/) (Local models)
 - **Memory:** [Mem0](https://mem0.ai/) with pgvector
 - **Web Framework:** [Hono](https://hono.dev/)
 - **Infrastructure:** Kubernetes (k3s), ArgoCD, PostgreSQL HA, RabbitMQ HA, Redis Cluster
@@ -84,7 +84,7 @@ Environment variables `DATABASE_URL` or `PG_PRIMARY_URL` must be set.
 
 ### Agent Implementation
 
-- **Standard Frameworks:** Use **Hono** for HTTP endpoints and **Vercel AI SDK** for LLM interactions.
+- **Standard Frameworks:** Use **Hono** for HTTP endpoints and `@mesh-six/core` llm module (`tracedChatCompletion`, `chatCompletionWithSchema`) for LLM interactions.
 - **Dapr Subscriptions:** Agents should expose a `GET /dapr/subscribe` endpoint and handle tasks via `POST /tasks`.
 - **Registration:** Agents must self-register with the `AgentRegistry` from `@mesh-six/core` on startup and maintain a heartbeat.
 - **Structured Output:** Use `zod` schemas for all task payloads and results.
