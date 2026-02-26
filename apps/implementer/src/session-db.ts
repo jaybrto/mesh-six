@@ -352,3 +352,119 @@ export async function markSessionInterrupted(sessionId: string): Promise<void> {
     [sessionId]
   );
 }
+
+// ---------------------------------------------------------------------------
+// terminal_snapshots (migration 011)
+// ---------------------------------------------------------------------------
+
+export async function insertSnapshot(params: {
+  sessionId: string;
+  ansiContent: string;
+  eventType: string;
+}): Promise<{ id: number }> {
+  const db = getPool();
+  const { rows } = await db.query<{ id: number }>(
+    `INSERT INTO terminal_snapshots (session_id, ansi_content, event_type)
+     VALUES ($1, $2, $3)
+     RETURNING id`,
+    [params.sessionId, params.ansiContent, params.eventType]
+  );
+  return rows[0];
+}
+
+export async function getSessionSnapshots(sessionId: string): Promise<Array<{
+  id: number;
+  sessionId: string;
+  ansiContent: string;
+  eventType: string;
+  capturedAt: string;
+}>> {
+  const db = getPool();
+  const { rows } = await db.query(
+    `SELECT id, session_id AS "sessionId", ansi_content AS "ansiContent",
+            event_type AS "eventType", captured_at AS "capturedAt"
+     FROM terminal_snapshots
+     WHERE session_id = $1
+     ORDER BY captured_at DESC`,
+    [sessionId]
+  );
+  return rows as Array<{ id: number; sessionId: string; ansiContent: string; eventType: string; capturedAt: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// terminal_recordings (migration 011)
+// ---------------------------------------------------------------------------
+
+export async function insertRecording(params: {
+  sessionId: string;
+  s3Key: string;
+  durationMs: number;
+  sizeBytes: number;
+  format?: string;
+}): Promise<{ id: number }> {
+  const db = getPool();
+  const { rows } = await db.query<{ id: number }>(
+    `INSERT INTO terminal_recordings (session_id, s3_key, duration_ms, size_bytes, format)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id`,
+    [params.sessionId, params.s3Key, params.durationMs, params.sizeBytes, params.format || "asciicast-v2"]
+  );
+  return rows[0];
+}
+
+export async function getSessionRecordings(sessionId: string): Promise<Array<{
+  id: number;
+  sessionId: string;
+  s3Key: string;
+  durationMs: number;
+  sizeBytes: number;
+  format: string;
+  uploadedAt: string;
+}>> {
+  const db = getPool();
+  const { rows } = await db.query(
+    `SELECT id, session_id AS "sessionId", s3_key AS "s3Key",
+            duration_ms AS "durationMs", size_bytes AS "sizeBytes",
+            format, uploaded_at AS "uploadedAt"
+     FROM terminal_recordings
+     WHERE session_id = $1
+     ORDER BY uploaded_at DESC`,
+    [sessionId]
+  );
+  return rows as Array<{ id: number; sessionId: string; s3Key: string; durationMs: number; sizeBytes: number; format: string; uploadedAt: string }>;
+}
+
+export async function getRecordingById(recordingId: number): Promise<{
+  id: number;
+  sessionId: string;
+  s3Key: string;
+  durationMs: number;
+  sizeBytes: number;
+  format: string;
+  uploadedAt: string;
+} | null> {
+  const db = getPool();
+  const { rows } = await db.query(
+    `SELECT id, session_id AS "sessionId", s3_key AS "s3Key",
+            duration_ms AS "durationMs", size_bytes AS "sizeBytes",
+            format, uploaded_at AS "uploadedAt"
+     FROM terminal_recordings WHERE id = $1`,
+    [recordingId]
+  );
+  return (rows[0] as { id: number; sessionId: string; s3Key: string; durationMs: number; sizeBytes: number; format: string; uploadedAt: string } | undefined) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// streaming_active flag (migration 011)
+// ---------------------------------------------------------------------------
+
+export async function updateStreamingActive(
+  sessionId: string,
+  active: boolean
+): Promise<void> {
+  const db = getPool();
+  await db.query(
+    `UPDATE implementation_sessions SET streaming_active = $2 WHERE id = $1`,
+    [sessionId, active]
+  );
+}

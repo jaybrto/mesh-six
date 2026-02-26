@@ -35,11 +35,14 @@ spec:
             - |
               chown -R 1001:1001 /home/bun/.claude
               chown -R 1001:1001 /worktrees
+              chown -R 1001:1001 /tmp/mesh-six-streams
           volumeMounts:
             - name: claude-session
               mountPath: /home/bun/.claude
             - name: worktrees
               mountPath: /worktrees
+            - name: stream-tmp
+              mountPath: /tmp/mesh-six-streams
       containers:
         - name: implementer
           image: registry.bto.bar/jaybrto/mesh-six-implementer:latest
@@ -68,6 +71,20 @@ spec:
                 secretKeyRef:
                   name: mesh-six-secrets
                   key: PG_PASSWORD
+            - name: MINIO_ENDPOINT
+              value: "http://minio.default.svc.cluster.local:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: MINIO_ACCESS_KEY
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: MINIO_SECRET_KEY
+            - name: MINIO_BUCKET
+              value: "mesh-six-recordings"
           readinessProbe:
             httpGet:
               path: /readyz
@@ -92,6 +109,16 @@ spec:
               mountPath: /home/bun/.claude
             - name: worktrees
               mountPath: /worktrees
+            - name: stream-tmp
+              mountPath: /tmp/mesh-six-streams
+              subPath: streams
+            - name: stream-tmp
+              mountPath: /tmp/mesh-six-recordings
+              subPath: recordings
+      volumes:
+        - name: stream-tmp
+          emptyDir:
+            sizeLimit: 500Mi
   volumeClaimTemplates:
     - metadata:
         name: claude-session

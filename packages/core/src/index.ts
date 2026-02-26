@@ -231,3 +231,26 @@ export {
   type HumanAnswerPayload,
   type AnswerQuestionOutput,
 } from "./architect-actor.js";
+
+// Terminal streaming types
+export {
+  TERMINAL_STREAM_TOPIC_PREFIX,
+  TERMINAL_SNAPSHOT_TOPIC_PREFIX,
+  SNAPSHOT_EVENT_TYPES,
+  TerminalSnapshotSchema,
+  RecordingMetadataSchema,
+  TerminalStreamChunkSchema,
+  type SnapshotEventType,
+  type TerminalSnapshot,
+  type RecordingMetadata,
+  type TerminalStreamChunk,
+} from "./terminal-types.js";
+
+// MinIO S3 client
+export {
+  createMinioClient,
+  uploadToMinio,
+  downloadFromMinio,
+  getPresignedUrl as getMinioPresignedUrl,
+  type MinioConfig,
+} from "./minio.js";

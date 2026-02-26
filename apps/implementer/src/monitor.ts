@@ -6,6 +6,7 @@
  * - MQTT events → real-time dashboard updates
  */
 import { DaprClient } from "@dapr/dapr";
+import pg from "pg";
 import {
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
@@ -22,6 +23,7 @@ import {
   updateClaudeSessionId,
 } from "./session-db.js";
 import type { ActorState } from "./actor.js";
+import { takeSnapshot } from "./terminal-relay.js";
 
 const log = (msg: string) => console.log(`[${AGENT_ID}][monitor] ${msg}`);
 
@@ -58,6 +60,7 @@ export interface MonitorContext {
   taskId: string;
   actorState: ActorState;
   daprClient: DaprClient;
+  pool: pg.Pool;
   onComplete: (result: TaskResult) => void;
 }
 
@@ -177,6 +180,9 @@ export class SessionMonitor {
           detailsJson: { questionId: question.id, questionText },
         });
 
+        // Fire-and-forget terminal snapshot
+        await takeSnapshot(sessionId, tmuxSessionName, "session_blocked", this.ctx.pool, daprClient).catch(() => {});
+
         // Raise event on workflow instance via Dapr HTTP API
         const { workflowId } = actorState;
         if (workflowId) {
@@ -248,6 +254,16 @@ export class SessionMonitor {
       eventType: success ? "session_completed" : "session_failed",
       detailsJson: errorMessage ? { error: errorMessage } : undefined,
     });
+
+    // Fire-and-forget terminal snapshot
+    const snapshotEvent = success ? "session_completed" : "session_failed";
+    await takeSnapshot(
+      sessionId,
+      this.ctx.actorState.tmuxSessionName,
+      snapshotEvent,
+      this.ctx.pool,
+      daprClient
+    ).catch(() => {});
 
     // Raise completion/failure event on workflow
     const { workflowId } = this.ctx.actorState;

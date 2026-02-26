@@ -7,6 +7,7 @@
  */
 import { join } from "path";
 import { mkdirSync, existsSync } from "fs";
+import { DaprClient } from "@dapr/dapr";
 import {
   type ImplementationSession,
   type ProvisionResponse,
@@ -23,6 +24,7 @@ import {
   CLAUDE_SESSION_DIR,
   AGENT_ID,
 } from "./config.js";
+import { startPaneStream, stopPaneStream, takeSnapshot } from "./terminal-relay.js";
 import {
   createSession,
   sendCommand,
@@ -72,9 +74,16 @@ export interface ActorState {
 export class ImplementerActor {
   private actorId: string;
   private state: ActorState | null = null;
+  private daprClient: DaprClient | null = null;
+  private pool: pg.Pool | null = null;
 
   constructor(actorId: string) {
     this.actorId = actorId;
+  }
+
+  setDependencies(daprClient: DaprClient, pool: pg.Pool): void {
+    this.daprClient = daprClient;
+    this.pool = pool;
   }
 
   // -------------------------------------------------------------------------
@@ -209,6 +218,15 @@ export class ImplementerActor {
     });
 
     log(`Session started in tmux session: ${tmuxSessionName}`);
+
+    // Start terminal streaming
+    if (this.daprClient && this.pool) {
+      await startPaneStream(sessionId, tmuxSessionName, this.daprClient, this.pool).catch((err) =>
+        log(`Failed to start pane stream: ${err}`)
+      );
+      await takeSnapshot(sessionId, tmuxSessionName, "session_start", this.pool, this.daprClient).catch(() => {});
+    }
+
     return { ok: true };
   }
 
@@ -242,6 +260,12 @@ export class ImplementerActor {
       });
 
       log(`Answer injected into session ${tmuxSessionName}`);
+
+      // Take snapshot after answer injection
+      if (this.daprClient && this.pool) {
+        await takeSnapshot(sessionId, tmuxSessionName, "answer_injected", this.pool, this.daprClient).catch(() => {});
+      }
+
       return { ok: true };
     } catch (err) {
       log(`Failed to inject answer: ${err}`);
@@ -308,6 +332,13 @@ export class ImplementerActor {
     if (!this.state) return;
 
     const { tmuxSessionName, sessionId } = this.state;
+
+    // Stop terminal streaming before killing session
+    if (this.pool) {
+      await stopPaneStream(sessionId, this.pool).catch((err) =>
+        log(`Failed to stop pane stream: ${err}`)
+      );
+    }
 
     if (await sessionExists(tmuxSessionName)) {
       await killSession(tmuxSessionName);

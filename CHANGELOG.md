@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-26: Live Terminal Streaming & Snapshots (GWA Phase 20 Migration)
+
+MQTT-based live terminal output streaming, asciicast v2 session recordings with MinIO S3 upload, ANSI terminal snapshots at lifecycle events, and a dashboard terminal viewer with xterm.js.
+
+**@mesh-six/core@0.10.0**
+- `terminal-types.ts`: Zod schemas and types — `TerminalSnapshotSchema`, `RecordingMetadataSchema`, `TerminalStreamChunkSchema`, topic constants (`TERMINAL_STREAM_TOPIC_PREFIX`, `TERMINAL_SNAPSHOT_TOPIC_PREFIX`), `SNAPSHOT_EVENT_TYPES`
+- `minio.ts`: shared MinIO S3 client module — `createMinioClient`, `uploadToMinio`, `downloadFromMinio`, `getPresignedUrl` (re-exported as `getMinioPresignedUrl`), `MinioConfig`
+
+**@mesh-six/implementer@0.4.0**
+- `terminal-relay.ts`: FIFO-based live terminal streaming via Dapr pubsub, asciicast v2 recording, 100ms/4KB batch chunking — `startPaneStream`, `stopPaneStream`, `takeSnapshot`, `isStreamActive`, `shutdownAllStreams`
+- `actor.ts`: terminal stream lifecycle — `startPaneStream` in `startSession()`, `takeSnapshot` in `injectAnswer()`, `stopPaneStream` in `onDeactivate()`, `setDependencies()` for DaprClient/Pool injection
+- `monitor.ts`: snapshot triggers at question detection (`session_blocked`) and completion (`session_completed`/`session_failed`), `pool` added to `MonitorContext`
+- `session-db.ts`: `insertSnapshot`, `getSessionSnapshots`, `insertRecording`, `getSessionRecordings`, `getRecordingById`, `updateStreamingActive`
+- `index.ts`: REST endpoints (`/sessions/:id/snapshots`, `/sessions/:id/recordings`, `/recordings/:id/url`), `shutdownAllStreams` in SIGTERM handler, Pool-based DB connection
+- Migration `011_terminal_streaming.sql`: `terminal_snapshots` table, `terminal_recordings` table, `streaming_active` column on `implementation_sessions`
+
+**@mesh-six/dashboard@0.2.0**
+- `useTerminalStream.tsx`: MQTT subscription hook for `terminal/stream/{sessionId}` and `terminal/snapshot/{sessionId}`
+- `TerminalViewer.tsx`: live xterm.js terminal viewer with MQTT chunk rendering and mid-stream join via REST snapshot fetch
+- `RecordingPlayer.tsx`: asciicast v2 playback with xterm.js (play/stop, progress tracking)
+- `SnapshotTimeline.tsx`: timeline of ANSI terminal snapshots with xterm.js preview at each lifecycle event
+- `SessionTerminalView.tsx`: tabbed view (Live | Snapshots | Recordings) at `/sessions/:sessionId/terminal`
+- `useMqtt.tsx`: added `terminal/stream/#` and `terminal/snapshot/#` topic subscriptions
+- `App.tsx`: added Sessions nav item and terminal route
+
+**K8s Infrastructure**
+- `k8s/base/implementer/statefulset.yaml`: MinIO env vars (`MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_BUCKET`), `stream-tmp` emptyDir volume (500Mi) mounted at `/tmp/mesh-six-streams` and `/tmp/mesh-six-recordings`
+
 ### Added - 2026-02-26: GWA Bug Fixes — Session Recovery, GitHub Comments, PR Filtering, Operational Scripts
 
 Parallel work across five areas: implementer session recovery with Claude `--resume`, GitHub issue comment integration for workflow status, PR/issue filtering in webhook-receiver, planning prompt templates, and a full suite of operational scripts and CronJobs.

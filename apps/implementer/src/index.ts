@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
+import pg from "pg";
 import {
   AgentRegistry,
   DAPR_PUBSUB_NAME,
@@ -9,6 +10,9 @@ import {
   type TaskResult,
   type DaprPubSubMessage,
   type DaprSubscription,
+  createMinioClient,
+  getMinioPresignedUrl,
+  type MinioConfig,
 } from "@mesh-six/core";
 import {
   APP_PORT,
@@ -16,10 +20,20 @@ import {
   DAPR_HTTP_PORT,
   AGENT_ID,
   AGENT_NAME,
+  DATABASE_URL,
 } from "./config.js";
 import { getOrCreateActor } from "./actor.js";
 import { SessionMonitor } from "./monitor.js";
-import { insertSession } from "./session-db.js";
+import {
+  insertSession,
+  getSessionSnapshots,
+  getSessionRecordings,
+  getRecordingById,
+} from "./session-db.js";
+import { shutdownAllStreams } from "./terminal-relay.js";
+
+const { Pool } = pg;
+const pool = new Pool({ connectionString: DATABASE_URL });
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: String(DAPR_HTTP_PORT) });
@@ -80,6 +94,34 @@ app.post("/tasks", async (c) => {
   });
 
   return c.json({ status: "SUCCESS" });
+});
+
+// Terminal streaming REST endpoints
+app.get("/sessions/:id/snapshots", async (c) => {
+  const sessionId = c.req.param("id");
+  const snapshots = await getSessionSnapshots(sessionId);
+  return c.json(snapshots);
+});
+
+app.get("/sessions/:id/recordings", async (c) => {
+  const sessionId = c.req.param("id");
+  const recordings = await getSessionRecordings(sessionId);
+  return c.json(recordings);
+});
+
+app.get("/recordings/:id/url", async (c) => {
+  const id = Number(c.req.param("id"));
+  const recording = await getRecordingById(id);
+  if (!recording) return c.json({ error: "Recording not found" }, 404);
+  const minioConfig: MinioConfig = {
+    endpoint: process.env.MINIO_ENDPOINT || "http://minio.default.svc.cluster.local:9000",
+    accessKeyId: process.env.MINIO_ACCESS_KEY || "",
+    secretAccessKey: process.env.MINIO_SECRET_KEY || "",
+    bucket: process.env.MINIO_BUCKET || "mesh-six-recordings",
+  };
+  const client = createMinioClient(minioConfig);
+  const url = await getMinioPresignedUrl(client, minioConfig.bucket, recording.s3Key);
+  return c.json({ url });
 });
 
 // Direct invocation endpoint — for synchronous calls (e.g., actor status queries)
@@ -195,6 +237,7 @@ async function handleTask(task: TaskRequest): Promise<void> {
 
   // Activate actor
   const actor = getOrCreateActor(actorId);
+  actor.setDependencies(daprClient, pool);
   const activateResult = await actor.onActivate({
     sessionId,
     issueNumber,
@@ -238,6 +281,7 @@ async function handleTask(task: TaskRequest): Promise<void> {
     taskId: task.id,
     actorState,
     daprClient,
+    pool,
     onComplete: (_result) => {
       activeMonitors.delete(sessionId);
     },
@@ -270,6 +314,11 @@ async function start(): Promise<void> {
 
 async function shutdown(): Promise<void> {
   console.log(`[${AGENT_ID}] Shutting down...`);
+
+  // Stop all terminal streams
+  await shutdownAllStreams(pool).catch((err) =>
+    console.error(`[${AGENT_ID}] Failed to shutdown streams:`, err)
+  );
 
   // Stop all active monitors
   for (const monitor of activeMonitors.values()) {
