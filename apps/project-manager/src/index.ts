@@ -19,6 +19,7 @@ import {
   TASK_RESULTS_TOPIC,
   tracedChatCompletion,
   chatCompletionWithSchema,
+  ARCHITECT_ACTOR_TYPE,
   type AgentRegistration,
   type TaskRequest,
   type TaskResult,
@@ -37,6 +38,13 @@ import {
   pollGithubForCompletion,
   type ProjectWorkflowInput,
   type WorkflowActivityImplementations,
+  type ComplexityGateInput,
+  type StartSessionInput,
+  type ConsultArchitectActorInput,
+  type InjectAnswerInput,
+  type NotifyHumanQuestionInput,
+  type ProcessHumanAnswerInput,
+  type InitializeArchitectActorInput,
 } from "./workflow.js";
 
 // --- Configuration ---
@@ -1833,6 +1841,120 @@ Categories:
         }
 
         return { resolved: false, question, agentsConsulted };
+      },
+
+      complexityGate: async (_ctx, input) => {
+        if (!github) return { simple: false };
+        const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+          owner: input.repoOwner,
+          repo: input.repoName,
+          issue_number: input.issueNumber,
+        });
+        return { simple: labels.some((l) => l.name.toLowerCase() === "simple") };
+      },
+
+      startSession: async (_ctx, input) => {
+        try {
+          const implActorId = `${input.repoOwner}-${input.repoName}-${input.issueNumber}`;
+          const activateUrl = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/actors/ImplementerActor/${implActorId}/method/onActivate`;
+          const activateRes = await fetch(activateUrl, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: crypto.randomUUID(),
+              issueNumber: input.issueNumber,
+              repoOwner: input.repoOwner,
+              repoName: input.repoName,
+              branch: input.branch,
+              workflowId: input.workflowId,
+            }),
+          });
+          if (!activateRes.ok) {
+            const text = await activateRes.text();
+            return { sessionId: "", ok: false, error: `Activation failed: ${text}` };
+          }
+          const activateResult = await activateRes.json() as { ok: boolean; error?: string };
+          if (!activateResult.ok) return { sessionId: "", ok: false, error: activateResult.error };
+
+          const startUrl = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/actors/ImplementerActor/${implActorId}/method/startSession`;
+          const startRes = await fetch(startUrl, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ implementationPrompt: input.implementationPrompt }),
+          });
+          if (!startRes.ok) {
+            const text = await startRes.text();
+            return { sessionId: "", ok: false, error: `Start session failed: ${text}` };
+          }
+          const startResult = await startRes.json() as { ok: boolean; error?: string };
+          return { sessionId: implActorId, ok: startResult.ok, error: startResult.error };
+        } catch (err) {
+          return { sessionId: "", ok: false, error: String(err) };
+        }
+      },
+
+      consultArchitectActor: async (_ctx, input) => {
+        const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/actors/${ARCHITECT_ACTOR_TYPE}/${input.actorId}/method/answerQuestion`;
+        const res = await fetch(url, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ questionText: input.questionText, source: input.source }),
+        });
+        if (!res.ok) {
+          return { confident: false, bestGuess: `Architect actor unavailable: ${res.status}` };
+        }
+        return res.json() as Promise<{ confident: boolean; answer?: string; bestGuess?: string }>;
+      },
+
+      injectAnswer: async (_ctx, input) => {
+        const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/actors/ImplementerActor/${input.implementerActorId}/method/injectAnswer`;
+        const res = await fetch(url, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ answerText: input.answerText }),
+        });
+        if (!res.ok) {
+          return { ok: false, error: `Inject answer failed: ${res.status}` };
+        }
+        return res.json() as Promise<{ ok: boolean; error?: string }>;
+      },
+
+      notifyHumanQuestion: async (_ctx, input) => {
+        const ntfyUrl = `https://ntfy.sh/mesh-six-pm`;
+        await fetch(ntfyUrl, {
+          method: "POST",
+          body: `Issue #${input.issueNumber} (${input.repoOwner}/${input.repoName})\n\nQuestion: ${input.questionText}${input.architectBestGuess ? `\n\nArchitect best guess: ${input.architectBestGuess}` : ""}`,
+          headers: {
+            Title: `mesh-six: Question on #${input.issueNumber}`,
+            Priority: "high",
+            Actions: `http, Reply, http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/project-manager/method/ntfy-reply, method=POST, headers.X-Workflow-Id=${input.workflowId}&headers.X-Question=${encodeURIComponent(input.questionText)}`,
+          },
+        }).catch((e) => console.warn(`[${AGENT_ID}] ntfy notification failed:`, e));
+      },
+
+      processHumanAnswer: async (_ctx, input) => {
+        const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/actors/${ARCHITECT_ACTOR_TYPE}/${input.architectActorId}/method/receiveHumanAnswer`;
+        await fetch(url, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ questionText: input.questionText, humanAnswer: input.humanAnswer }),
+        }).catch((e) => console.warn(`[${AGENT_ID}] processHumanAnswer failed:`, e));
+      },
+
+      initializeArchitectActor: async (_ctx, input) => {
+        const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/actors/${ARCHITECT_ACTOR_TYPE}/${input.actorId}/method/initialize`;
+        await fetch(url, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            issueNumber: input.issueNumber,
+            repoOwner: input.repoOwner,
+            repoName: input.repoName,
+            workflowId: input.workflowId,
+            projectItemId: input.projectItemId,
+            issueTitle: input.issueTitle,
+          }),
+        });
       },
     };
 
