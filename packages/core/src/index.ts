@@ -171,3 +171,24 @@ export {
   type LLMServiceStatus,
   type CLIHookEvent,
 } from "./llm-service.js";
+
+// Architect Actor
+export {
+  ARCHITECT_ACTOR_TYPE,
+  ArchitectActorStateSchema,
+  ArchitectEventSchema,
+  ARCHITECT_EVENT_TYPES,
+  PlanningEventPayloadSchema,
+  ImplEventPayloadSchema,
+  QaEventPayloadSchema,
+  HumanAnswerPayloadSchema,
+  AnswerQuestionOutputSchema,
+  type ArchitectActorState,
+  type ArchitectEvent,
+  type ArchitectEventType,
+  type PlanningEventPayload,
+  type ImplEventPayload,
+  type QaEventPayload,
+  type HumanAnswerPayload,
+  type AnswerQuestionOutput,
+} from "./architect-actor.js";
