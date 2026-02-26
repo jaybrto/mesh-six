@@ -264,4 +264,3 @@ export type SessionQuestion = z.infer<typeof SessionQuestionSchema>;
 export const AUTH_SERVICE_APP_ID = "auth-service";
 export const CREDENTIAL_REFRESHED_TOPIC = "credential-refreshed";
 export const CONFIG_UPDATED_TOPIC = "config-updated";
-export const SESSION_BLOCKED_TOPIC = "session-blocked";

@@ -1,5 +1,4 @@
 import { describe, it, expect } from "bun:test";
-import { pollGithubForCompletion } from "../workflow.js";
 import type {
   ProjectWorkflowInput,
   LoadRetryBudgetInput,
@@ -55,32 +54,3 @@ describe("Retry Budget types", () => {
   });
 });
 
-describe("pollGithubForCompletion", () => {
-  it("completes when pollFn returns a result", async () => {
-    let calls = 0;
-    const { result, timedOut, blocked } = await pollGithubForCompletion(
-      async () => {
-        calls++;
-        return calls >= 2 ? "found" : null;
-      },
-      async () => false,
-      1,
-      50
-    );
-    expect(result).toBe("found");
-    expect(timedOut).toBe(false);
-    expect(blocked).toBe(false);
-    expect(calls).toBe(2);
-  });
-
-  it("returns blocked when checkBlocked returns true", async () => {
-    const { result, blocked } = await pollGithubForCompletion(
-      async () => null,
-      async () => true,
-      1,
-      50
-    );
-    expect(result).toBeNull();
-    expect(blocked).toBe(true);
-  });
-});

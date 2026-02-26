@@ -108,20 +108,6 @@ export interface RecordWorkflowMappingInput {
   projectItemId: string;
 }
 
-export interface PollForPlanInput {
-  issueNumber: number;
-  repoOwner: string;
-  repoName: string;
-  projectItemId: string;
-  timeoutMinutes: number;
-}
-
-export interface PollForPlanOutput {
-  planContent: string;
-  timedOut: boolean;
-  blocked: boolean;
-}
-
 export interface ReviewPlanInput {
   issueNumber: number;
   repoOwner: string;
@@ -140,34 +126,6 @@ export interface AddCommentInput {
   repoOwner: string;
   repoName: string;
   body: string;
-}
-
-export interface PollForImplementationInput {
-  issueNumber: number;
-  repoOwner: string;
-  repoName: string;
-  projectItemId: string;
-  timeoutMinutes: number;
-}
-
-export interface PollForImplementationOutput {
-  prNumber: number | null;
-  timedOut: boolean;
-  blocked: boolean;
-}
-
-export interface PollForTestResultsInput {
-  issueNumber: number;
-  repoOwner: string;
-  repoName: string;
-  projectItemId: string;
-  timeoutMinutes: number;
-}
-
-export interface PollForTestResultsOutput {
-  testContent: string;
-  timedOut: boolean;
-  blocked: boolean;
 }
 
 export interface EvaluateTestResultsInput {
@@ -422,13 +380,6 @@ export let recordWorkflowMappingActivity: ActivityFn<
   throw new Error("recordWorkflowMappingActivity not initialized");
 };
 
-export let pollForPlanActivity: ActivityFn<
-  PollForPlanInput,
-  PollForPlanOutput
-> = async () => {
-  throw new Error("pollForPlanActivity not initialized");
-};
-
 export let reviewPlanActivity: ActivityFn<
   ReviewPlanInput,
   ReviewPlanOutput
@@ -440,20 +391,6 @@ export let addCommentActivity: ActivityFn<AddCommentInput, void> =
   async () => {
     throw new Error("addCommentActivity not initialized");
   };
-
-export let pollForImplementationActivity: ActivityFn<
-  PollForImplementationInput,
-  PollForImplementationOutput
-> = async () => {
-  throw new Error("pollForImplementationActivity not initialized");
-};
-
-export let pollForTestResultsActivity: ActivityFn<
-  PollForTestResultsInput,
-  PollForTestResultsOutput
-> = async () => {
-  throw new Error("pollForTestResultsActivity not initialized");
-};
 
 export let evaluateTestResultsActivity: ActivityFn<
   EvaluateTestResultsInput,
@@ -1145,11 +1082,8 @@ export interface WorkflowActivityImplementations {
   recordPendingMove: typeof recordPendingMoveActivity;
   moveCard: typeof moveCardActivity;
   recordWorkflowMapping: typeof recordWorkflowMappingActivity;
-  pollForPlan: typeof pollForPlanActivity;
   reviewPlan: typeof reviewPlanActivity;
   addComment: typeof addCommentActivity;
-  pollForImplementation: typeof pollForImplementationActivity;
-  pollForTestResults: typeof pollForTestResultsActivity;
   evaluateTestResults: typeof evaluateTestResultsActivity;
   waitForDeployment: typeof waitForDeploymentActivity;
   validateDeployment: typeof validateDeploymentActivity;
@@ -1184,11 +1118,8 @@ export function createWorkflowRuntime(
   recordPendingMoveActivity = activityImpls.recordPendingMove;
   moveCardActivity = activityImpls.moveCard;
   recordWorkflowMappingActivity = activityImpls.recordWorkflowMapping;
-  pollForPlanActivity = activityImpls.pollForPlan;
   reviewPlanActivity = activityImpls.reviewPlan;
   addCommentActivity = activityImpls.addComment;
-  pollForImplementationActivity = activityImpls.pollForImplementation;
-  pollForTestResultsActivity = activityImpls.pollForTestResults;
   evaluateTestResultsActivity = activityImpls.evaluateTestResults;
   waitForDeploymentActivity = activityImpls.waitForDeployment;
   validateDeploymentActivity = activityImpls.validateDeployment;
@@ -1223,11 +1154,8 @@ export function createWorkflowRuntime(
   runtime.registerActivity(recordPendingMoveActivity);
   runtime.registerActivity(moveCardActivity);
   runtime.registerActivity(recordWorkflowMappingActivity);
-  runtime.registerActivity(pollForPlanActivity);
   runtime.registerActivity(reviewPlanActivity);
   runtime.registerActivity(addCommentActivity);
-  runtime.registerActivity(pollForImplementationActivity);
-  runtime.registerActivity(pollForTestResultsActivity);
   runtime.registerActivity(evaluateTestResultsActivity);
   runtime.registerActivity(waitForDeploymentActivity);
   runtime.registerActivity(validateDeploymentActivity);
@@ -1332,44 +1260,3 @@ export async function purgeProjectWorkflow(
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// Polling helper (used by activity implementations)
-// ---------------------------------------------------------------------------
-
-/**
- * Generic polling loop with deadline-based timeout and Blocked column detection.
- *
- * @param pollFn Function that performs one poll. Returns the result or null to keep polling.
- * @param checkBlocked Function that checks if the card has moved to Blocked column.
- * @param timeoutMinutes Total time budget for polling.
- * @param intervalMs Polling interval in milliseconds (default: 15000).
- * @returns The poll result, or { timedOut: true } / { blocked: true }.
- */
-export async function pollGithubForCompletion<T>(
-  pollFn: () => Promise<T | null>,
-  checkBlocked: () => Promise<boolean>,
-  timeoutMinutes: number,
-  intervalMs = 15_000
-): Promise<{ result: T | null; timedOut: boolean; blocked: boolean }> {
-  const deadline = Date.now() + timeoutMinutes * 60 * 1000;
-
-  while (Date.now() < deadline) {
-    // Check if card has been moved to Blocked
-    const isBlocked = await checkBlocked();
-    if (isBlocked) {
-      return { result: null, timedOut: false, blocked: true };
-    }
-
-    // Attempt the poll
-    const result = await pollFn();
-    if (result !== null) {
-      return { result, timedOut: false, blocked: false };
-    }
-
-    // Add 0-5s random jitter to prevent synchronized polling from concurrent workflows
-    const jitter = Math.floor(Math.random() * 5000);
-    await new Promise((resolve) => setTimeout(resolve, intervalMs + jitter));
-  }
-
-  return { result: null, timedOut: true, blocked: false };
-}

@@ -35,7 +35,6 @@ import {
   startProjectWorkflow,
   getProjectWorkflowStatus,
   raiseWorkflowEvent,
-  pollGithubForCompletion,
   type ProjectWorkflowInput,
   type WorkflowActivityImplementations,
   type ComplexityGateInput,
@@ -1513,28 +1512,6 @@ async function start(): Promise<void> {
         );
       },
 
-      pollForPlan: async (_ctx, input) => {
-        if (!ghProjectClient) return { planContent: "", timedOut: true, blocked: false };
-        const { result, timedOut, blocked } = await pollGithubForCompletion(
-          async () => {
-            const comments = await ghProjectClient!.getIssueComments(input.repoOwner, input.repoName, input.issueNumber);
-            // Look for a comment that looks like a plan (has headings, task lists)
-            for (const comment of comments.reverse()) {
-              if (comment.body.length > 200 && (comment.body.includes("##") || comment.body.includes("- ["))) {
-                return comment.body;
-              }
-            }
-            return null;
-          },
-          async () => {
-            const col = await ghProjectClient!.getItemColumn(input.projectItemId);
-            return col === "Blocked";
-          },
-          input.timeoutMinutes
-        );
-        return { planContent: result ?? "", timedOut, blocked };
-      },
-
       reviewPlan: async (_ctx, input) => {
         const { text } = await tracedChatCompletion(
           {
@@ -1553,44 +1530,6 @@ async function start(): Promise<void> {
 
       addComment: async (_ctx, input) => {
         await addGitHubComment(input.repoOwner, input.repoName, input.issueNumber, input.body);
-      },
-
-      pollForImplementation: async (_ctx, input) => {
-        if (!ghProjectClient) return { prNumber: null, timedOut: true, blocked: false };
-        const { result, timedOut, blocked } = await pollGithubForCompletion(
-          async () => {
-            const prs = await ghProjectClient!.getIssuePRs(input.repoOwner, input.repoName, input.issueNumber);
-            if (prs.length > 0) return prs[0].number;
-            return null;
-          },
-          async () => {
-            const col = await ghProjectClient!.getItemColumn(input.projectItemId);
-            return col === "Blocked";
-          },
-          input.timeoutMinutes
-        );
-        return { prNumber: result, timedOut, blocked };
-      },
-
-      pollForTestResults: async (_ctx, input) => {
-        if (!ghProjectClient) return { testContent: "", timedOut: true, blocked: false };
-        const { result, timedOut, blocked } = await pollGithubForCompletion(
-          async () => {
-            const comments = await ghProjectClient!.getIssueComments(input.repoOwner, input.repoName, input.issueNumber);
-            for (const comment of comments.reverse()) {
-              if (comment.body.includes("test") && (comment.body.includes("pass") || comment.body.includes("fail") || comment.body.includes("PASS") || comment.body.includes("FAIL"))) {
-                return comment.body;
-              }
-            }
-            return null;
-          },
-          async () => {
-            const col = await ghProjectClient!.getItemColumn(input.projectItemId);
-            return col === "Blocked";
-          },
-          input.timeoutMinutes
-        );
-        return { testContent: result ?? "", timedOut, blocked };
       },
 
       evaluateTestResults: async (_ctx, input) => {

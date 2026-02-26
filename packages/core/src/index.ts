@@ -43,7 +43,6 @@ export {
   AUTH_SERVICE_APP_ID,
   CREDENTIAL_REFRESHED_TOPIC,
   CONFIG_UPDATED_TOPIC,
-  SESSION_BLOCKED_TOPIC,
 } from "./types.js";
 
 // Registry
