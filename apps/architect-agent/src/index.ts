@@ -12,12 +12,15 @@ import {
   tool,
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
+  ARCHITECT_ACTOR_TYPE,
   type AgentRegistration,
   type TaskRequest,
   type TaskResult,
   type DaprPubSubMessage,
   type DaprSubscription,
 } from "@mesh-six/core";
+import { ActorRuntime } from "./actor-runtime.js";
+import { ArchitectActor, setActorDeps } from "./actor.js";
 
 // --- Configuration ---
 const AGENT_ID = process.env.AGENT_ID || "architect-agent";
@@ -347,6 +350,17 @@ app.get("/dapr/subscribe", (c): Response => {
   return c.json(subscriptions);
 });
 
+// Dapr actor config — declares actor types hosted by this service
+app.get("/dapr/config", (c) =>
+  c.json({
+    entities: [ARCHITECT_ACTOR_TYPE],
+    actorIdleTimeout: "60m",
+    drainOngoingCallTimeout: "60s",
+    drainRebalancedActors: true,
+    reentrancy: { enabled: false },
+  })
+);
+
 // --- Main Consultation Endpoint (Service Invocation) ---
 app.post("/consult", async (c) => {
   const startTime = Date.now();
@@ -570,6 +584,56 @@ ${question}`,
   return recommendation;
 }
 
+// ---------------------------------------------------------------------------
+// Dapr Actor HTTP Protocol Routes
+// ---------------------------------------------------------------------------
+
+let actorRuntime: ActorRuntime | null = null;
+
+// Activate actor
+app.put("/actors/:actorType/:actorId", async (c) => {
+  const { actorType, actorId } = c.req.param();
+  if (!actorRuntime) return c.json({ error: "Actor runtime not initialized" }, 500);
+  await actorRuntime.activate(actorType, actorId);
+  return c.json({ ok: true });
+});
+
+// Deactivate actor
+app.delete("/actors/:actorType/:actorId", async (c) => {
+  const { actorType, actorId } = c.req.param();
+  if (!actorRuntime) return c.json({ error: "Actor runtime not initialized" }, 500);
+  await actorRuntime.deactivate(actorType, actorId);
+  return c.json({ ok: true });
+});
+
+// Invoke actor method
+app.put("/actors/:actorType/:actorId/method/:methodName", async (c) => {
+  const { actorType, actorId, methodName } = c.req.param();
+  if (!actorRuntime) return c.json({ error: "Actor runtime not initialized" }, 500);
+  let body: unknown;
+  try { body = await c.req.json(); } catch { body = undefined; }
+  const result = await actorRuntime.invoke(actorType, actorId, methodName, body);
+  return c.json(result ?? { ok: true });
+});
+
+// Timer callback
+app.put("/actors/:actorType/:actorId/method/timer/:timerName", async (c) => {
+  const { actorType, actorId, timerName } = c.req.param();
+  if (!actorRuntime) return c.json({ error: "Actor runtime not initialized" }, 500);
+  await actorRuntime.timer(actorType, actorId, timerName);
+  return c.json({ ok: true });
+});
+
+// Reminder callback
+app.put("/actors/:actorType/:actorId/method/remind/:reminderName", async (c) => {
+  const { actorType, actorId, reminderName } = c.req.param();
+  if (!actorRuntime) return c.json({ error: "Actor runtime not initialized" }, 500);
+  let body: unknown;
+  try { body = await c.req.json(); } catch { body = undefined; }
+  await actorRuntime.reminder(actorType, actorId, reminderName, body);
+  return c.json({ ok: true });
+});
+
 // --- Lifecycle ---
 let heartbeatInterval: Timer | null = null;
 
@@ -584,6 +648,24 @@ async function start(): Promise<void> {
       memory = null;
     }
   }
+
+  // Initialize actor runtime
+  const archPool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+
+  setActorDeps({
+    pool: archPool,
+    model: LLM_MODEL,
+    handleConsultation: handleConsultation,
+    tracedChatCompletion: (opts, trace) => tracedChatCompletion(opts, trace as any),
+    memoryStore: memory ? (msgs, userId, meta) => memory!.store(msgs as Array<{ role: "user" | "assistant" | "system"; content: string }>, userId, meta) : null,
+    memorySearch: memory ? (query, userId, limit) => memory!.search(query, userId, limit) : null,
+  });
+
+  actorRuntime = new ActorRuntime(
+    ARCHITECT_ACTOR_TYPE,
+    (actorType, actorId) => new ArchitectActor(actorType, actorId),
+  );
+  console.log(`[${AGENT_ID}] Actor runtime initialized for ${ARCHITECT_ACTOR_TYPE}`);
 
   // Register with agent registry
   await registry.register(REGISTRATION);
