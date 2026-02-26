@@ -22,7 +22,7 @@ import {
   AGENT_NAME,
   DATABASE_URL,
 } from "./config.js";
-import { getOrCreateActor } from "./actor.js";
+import { getOrCreateActor, podStartupRecovery } from "./actor.js";
 import { SessionMonitor } from "./monitor.js";
 import {
   insertSession,
@@ -339,6 +339,9 @@ async function handleTask(task: TaskRequest): Promise<void> {
 let heartbeatInterval: Timer | null = null;
 
 async function start(): Promise<void> {
+  // Recover any sessions left in running/blocked state from a previous pod lifecycle
+  await podStartupRecovery(pool);
+
   await registry.register(REGISTRATION);
   console.log(`[${AGENT_ID}] Registered in agent registry`);
 
