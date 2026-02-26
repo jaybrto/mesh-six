@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-26: GWA Migration — Event-Driven Workflow with Architect Actor
+
+**@mesh-six/core@0.8.0**
+- `ArchitectActorStateSchema`, `ArchitectEventSchema`, `ARCHITECT_ACTOR_TYPE` and typed event payload schemas (`PlanningEventPayload`, `ImplEventPayload`, `QaEventPayload`, `HumanAnswerPayload`)
+- `AnswerQuestionOutputSchema` for architect actor confidence-based responses
+- Removed `SESSION_BLOCKED_TOPIC` (replaced by Dapr workflow `raiseEvent`)
+
+**@mesh-six/architect-agent@0.2.0**
+- `ArchitectActor` Dapr actor class with per-issue instances and PostgreSQL event log
+- Actor methods: `initialize`, `consult`, `answerQuestion`, `receiveHumanAnswer`, `getHistory`
+- Mem0 integration for cross-issue learning (generalized Q&A stored to global `architect` scope)
+- `event-db` module (`appendEvent`, `loadEvents`, `loadEventsByType`)
+- `actor-runtime.ts` (Dapr actor HTTP protocol) and `config.ts`
+- Dapr actor HTTP routes wired into Hono service
+
+**@mesh-six/project-manager@0.5.0**
+- Event-driven PLANNING phase: `waitForExternalEvent("planning-event")` replaces polling
+- Event-driven IMPLEMENTATION phase: `waitForExternalEvent("impl-event")` replaces polling
+- Event-driven QA phase: `waitForExternalEvent("qa-event")` replaces polling
+- Complexity gate: `simple` label skips Opus planning
+- Architect actor question loop: questions routed through `ArchitectActor.answerQuestion`, confident answers injected back into Claude CLI, low-confidence escalated to human via ntfy
+- Human answer flow: ntfy reply webhook -> `raiseEvent("human-answer")` -> `processHumanAnswer` -> Mem0 learning
+- New activities: `complexityGate`, `startSession`, `consultArchitectActor`, `injectAnswer`, `notifyHumanQuestion`, `processHumanAnswer`, `initializeArchitectActor`
+- Removed polling activities (`pollForPlan`, `pollForImplementation`, `pollForTestResults`) and `pollGithubForCompletion` helper
+
+**@mesh-six/implementer@0.2.0**
+- `workflowId` field on `ActorState` for workflow event correlation
+- `injectAnswer` method on `ImplementerActor` for injecting answers via `tmux send-keys`
+- `SessionMonitor` raises typed events on workflow instances via Dapr HTTP `raiseEvent` API
+- `questionDetected` flag properly resets after answer injection
+
+**Infrastructure**
+- Migration `009_architect_events.sql`: `architect_events` table with actor_id, event_type, JSONB payload
+- K8s: actor annotations on architect-agent deployment, `architect-agent` added to `statestore-actor-redis` scopes
+
 ### Added - 2026-02-25: PM Enhancements — Retry Budget, Parallel Workflows, PM Autonomy
 
 Three enhancements to the project-manager: DB-backed retry budgets replace hardcoded cycle limits, in-memory Maps replaced with PostgreSQL lookups to support concurrent workflows, and a two-agent auto-resolve cascade for blocked questions.
