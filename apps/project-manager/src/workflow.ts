@@ -857,56 +857,58 @@ export const projectWorkflow: TWorkflow = async function* (
   // IMPLEMENTATION phase (card is in In Progress)
   // =====================================================================
 
-  const implResult: PollForImplementationOutput = yield ctx.callActivity(
-    pollForImplementationActivity,
-    {
-      issueNumber,
-      repoOwner,
-      repoName,
-      projectItemId,
-      timeoutMinutes: 60,
-    }
-  );
+  const architectActorIdImpl = `${repoOwner}/${repoName}/${issueNumber}`;
+  const implActorId = `${repoOwner}-${repoName}-${issueNumber}`;
+  let implComplete = false;
+  let prNumber: number | null = null;
 
-  if (implResult.blocked) {
-    console.log(`[Workflow] Issue #${issueNumber} blocked during implementation`);
+  while (!implComplete) {
+    const implEvent: ImplEventPayload = yield ctx.waitForExternalEvent("impl-event");
 
-    // Attempt autonomous resolution before escalating
-    const autoResolveImpl: AttemptAutoResolveOutput = yield ctx.callActivity(
-      attemptAutoResolveActivity,
-      { issueNumber, repoOwner, repoName, workflowPhase: "IMPLEMENTATION" }
-    );
-
-    if (autoResolveImpl.resolved) {
-      console.log(`[Workflow] Auto-resolved blocked question for issue #${issueNumber}`);
-      yield ctx.callActivity(addCommentActivity, {
-        issueNumber, repoOwner, repoName,
-        body: `**PM Auto-Resolution** (consulted: ${autoResolveImpl.agentsConsulted.join(", ")})\n\n${autoResolveImpl.answer}`,
+    if (implEvent.type === "session-failed") {
+      yield ctx.callActivity(moveToFailedActivity, {
+        issueNumber, repoOwner, repoName, projectItemId, workflowId,
+        reason: `Implementation session failed: ${implEvent.error}`,
       });
-    } else {
-      // Escalate with best-guess context
-      const ntfyBody = autoResolveImpl.bestGuess
-        ? `${autoResolveImpl.question}\n\nPM best guess (${autoResolveImpl.agentsConsulted.join("+")}): ${autoResolveImpl.bestGuess}`
-        : autoResolveImpl.question;
-      yield ctx.callActivity(notifyBlockedActivity, {
-        issueNumber, repoOwner, repoName,
-        question: ntfyBody,
-        ntfyTopic: "mesh-six-pm",
-      });
+      return { issueNumber, repoOwner, repoName, finalPhase: "FAILED" as WorkflowPhase };
     }
 
-    yield ctx.waitForExternalEvent("card-unblocked");
-    console.log(`[Workflow] Issue #${issueNumber} unblocked, continuing to QA`);
-  }
+    if (implEvent.type === "question-detected") {
+      const archAnswer: ConsultArchitectActorOutput = yield ctx.callActivity(
+        consultArchitectActorActivity,
+        { actorId: architectActorIdImpl, questionText: implEvent.questionText, source: "implementation" }
+      );
 
-  if (implResult.timedOut) {
-    yield ctx.callActivity(notifyTimeoutActivity, {
-      issueNumber,
-      repoOwner,
-      repoName,
-      phase: "implementation",
-      ntfyTopic: "mesh-six-pm",
-    });
+      if (archAnswer.confident) {
+        yield ctx.callActivity(injectAnswerActivity, {
+          implementerActorId: implActorId,
+          answerText: archAnswer.answer!,
+        });
+      } else {
+        yield ctx.callActivity(notifyHumanQuestionActivity, {
+          issueNumber, repoOwner, repoName, workflowId,
+          questionText: implEvent.questionText,
+          architectBestGuess: archAnswer.bestGuess,
+        });
+        const humanAnswer: HumanAnswerPayload = yield ctx.waitForExternalEvent("human-answer");
+        yield ctx.callActivity(processHumanAnswerActivity, {
+          architectActorId: architectActorIdImpl,
+          questionText: implEvent.questionText,
+          humanAnswer: humanAnswer.answer,
+        });
+        yield ctx.callActivity(injectAnswerActivity, {
+          implementerActorId: implActorId,
+          answerText: humanAnswer.answer,
+        });
+      }
+      continue;
+    }
+
+    if (implEvent.type === "pr-created") {
+      prNumber = implEvent.prNumber;
+      implComplete = true;
+      console.log(`[Workflow] PR #${prNumber} created for issue #${issueNumber}`);
+    }
   }
 
   // Move to QA
@@ -934,128 +936,80 @@ export const projectWorkflow: TWorkflow = async function* (
       `[Workflow] QA cycle ${qaCycles}/${maxCycles} for issue #${issueNumber}`
     );
 
-    const qaResult: PollForTestResultsOutput = yield ctx.callActivity(
-      pollForTestResultsActivity,
-      {
-        issueNumber,
-        repoOwner,
-        repoName,
-        projectItemId,
-        timeoutMinutes: 15,
-      }
-    );
+    const qaEvent: QaEventPayload = yield ctx.waitForExternalEvent("qa-event");
 
-    if (qaResult.blocked) {
-      console.log(`[Workflow] Issue #${issueNumber} blocked during QA`);
+    if (qaEvent.type === "session-failed") {
+      yield ctx.callActivity(moveToFailedActivity, {
+        issueNumber, repoOwner, repoName, projectItemId, workflowId,
+        reason: `QA session failed: ${qaEvent.error}`,
+      });
+      return { issueNumber, repoOwner, repoName, finalPhase: "FAILED" as WorkflowPhase };
+    }
 
-      // Attempt autonomous resolution before escalating
-      const autoResolveQa: AttemptAutoResolveOutput = yield ctx.callActivity(
-        attemptAutoResolveActivity,
-        { issueNumber, repoOwner, repoName, workflowPhase: "QA" }
+    if (qaEvent.type === "question-detected") {
+      const archAnswer: ConsultArchitectActorOutput = yield ctx.callActivity(
+        consultArchitectActorActivity,
+        { actorId: architectActorIdImpl, questionText: qaEvent.questionText, source: "qa" }
       );
 
-      if (autoResolveQa.resolved) {
-        console.log(`[Workflow] Auto-resolved blocked question for issue #${issueNumber}`);
-        yield ctx.callActivity(addCommentActivity, {
-          issueNumber, repoOwner, repoName,
-          body: `**PM Auto-Resolution** (consulted: ${autoResolveQa.agentsConsulted.join(", ")})\n\n${autoResolveQa.answer}`,
+      if (archAnswer.confident) {
+        yield ctx.callActivity(injectAnswerActivity, {
+          implementerActorId: implActorId,
+          answerText: archAnswer.answer!,
         });
       } else {
-        // Escalate with best-guess context
-        const ntfyBody = autoResolveQa.bestGuess
-          ? `${autoResolveQa.question}\n\nPM best guess (${autoResolveQa.agentsConsulted.join("+")}): ${autoResolveQa.bestGuess}`
-          : autoResolveQa.question;
-        yield ctx.callActivity(notifyBlockedActivity, {
-          issueNumber, repoOwner, repoName,
-          question: ntfyBody,
-          ntfyTopic: "mesh-six-pm",
+        yield ctx.callActivity(notifyHumanQuestionActivity, {
+          issueNumber, repoOwner, repoName, workflowId,
+          questionText: qaEvent.questionText,
+          architectBestGuess: archAnswer.bestGuess,
+        });
+        const humanAnswer: HumanAnswerPayload = yield ctx.waitForExternalEvent("human-answer");
+        yield ctx.callActivity(processHumanAnswerActivity, {
+          architectActorId: architectActorIdImpl,
+          questionText: qaEvent.questionText,
+          humanAnswer: humanAnswer.answer,
+        });
+        yield ctx.callActivity(injectAnswerActivity, {
+          implementerActorId: implActorId,
+          answerText: humanAnswer.answer,
         });
       }
-
-      yield ctx.waitForExternalEvent("card-unblocked");
-      console.log(`[Workflow] Issue #${issueNumber} unblocked, resuming QA`);
       continue;
     }
 
-    if (qaResult.timedOut) {
-      yield ctx.callActivity(notifyTimeoutActivity, {
-        issueNumber,
-        repoOwner,
-        repoName,
-        phase: "qa",
-        ntfyTopic: "mesh-six-pm",
-      });
-      continue;
-    }
-
-    // Evaluate test results via LLM
-    const testEval: EvaluateTestResultsOutput = yield ctx.callActivity(
-      evaluateTestResultsActivity,
-      {
-        issueNumber,
-        repoOwner,
-        repoName,
-        testContent: qaResult.testContent,
-      }
-    );
-
-    if (testEval.passed) {
-      qaPassedFinal = true;
-      console.log(`[Workflow] Tests passed for issue #${issueNumber}`);
-    } else {
-      // Create bug issue and move back to Planning
-      yield ctx.callActivity(createBugIssueActivity, {
-        repoOwner,
-        repoName,
-        parentIssueNumber: issueNumber,
-        failures: testEval.failures,
-      });
-
-      yield ctx.callActivity(incrementRetryCycleActivity, {
-        workflowId,
-        phase: "qa",
-        failureReason: testEval.failures.join("; "),
-      });
-
-      yield ctx.callActivity(recordPendingMoveActivity, {
-        projectItemId,
-        toColumn: "Planning",
-      });
-      yield ctx.callActivity(moveCardActivity, {
-        projectItemId,
-        toColumn: "Planning",
-      });
-
-      console.log(
-        `[Workflow] Tests failed for issue #${issueNumber}, moved back to Planning (cycle ${qaCycles})`
+    if (qaEvent.type === "test-results") {
+      const testEval: EvaluateTestResultsOutput = yield ctx.callActivity(
+        evaluateTestResultsActivity,
+        { issueNumber, repoOwner, repoName, testContent: qaEvent.testContent }
       );
 
-      // Wait for Claude to fix and produce new test results
-      // (Re-enter QA after Planning -> In Progress -> QA cycle is implicit
-      //  since GWA reacts to column changes. We wait for the card to come back.)
-      if (qaCycles < maxCycles) {
-        // Wait for the card to be moved back through the pipeline.
-        // The PM will detect the card returning to QA via webhook events.
-        yield ctx.waitForExternalEvent("qa-ready");
+      if (testEval.passed) {
+        qaPassedFinal = true;
+        console.log(`[Workflow] Tests passed for issue #${issueNumber}`);
+      } else {
+        yield ctx.callActivity(createBugIssueActivity, {
+          repoOwner, repoName,
+          parentIssueNumber: issueNumber,
+          failures: testEval.failures,
+        });
+        yield ctx.callActivity(incrementRetryCycleActivity, {
+          workflowId,
+          phase: "qa",
+          failureReason: testEval.failures.join("; "),
+        });
+        console.log(
+          `[Workflow] Tests failed for issue #${issueNumber}, cycle ${qaCycles}`
+        );
       }
     }
   }
 
   if (!qaPassedFinal) {
     yield ctx.callActivity(moveToFailedActivity, {
-      issueNumber,
-      repoOwner,
-      repoName,
-      projectItemId,
-      workflowId,
+      issueNumber, repoOwner, repoName, projectItemId, workflowId,
       reason: `Tests did not pass after ${maxCycles} QA cycles`,
     });
-    return {
-      issueNumber,
-      repoOwner,
-      repoName,
-      finalPhase: "FAILED" as WorkflowPhase,
-    };
+    return { issueNumber, repoOwner, repoName, finalPhase: "FAILED" as WorkflowPhase };
   }
 
   // Tests pass -> move to Review
@@ -1177,7 +1131,7 @@ export const projectWorkflow: TWorkflow = async function* (
     repoOwner,
     repoName,
     finalPhase: "ACCEPTED" as WorkflowPhase,
-    prNumber: implResult.prNumber ?? undefined,
+    prNumber: prNumber ?? undefined,
   } satisfies ProjectWorkflowResult;
 };
 
