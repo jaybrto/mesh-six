@@ -19,3 +19,4 @@ spec:
       value: "true"
   scopes:
     - llm-service
+    - architect-agent

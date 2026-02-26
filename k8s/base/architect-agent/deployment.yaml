@@ -22,6 +22,9 @@ spec:
         dapr.io/log-level: "info"
         dapr.io/enable-metrics: "true"
         dapr.io/metrics-port: "9090"
+        dapr.io/actor-types: "ArchitectActor"
+        dapr.io/actor-idle-timeout: "60m"
+        dapr.io/actor-scan-interval: "30s"
     spec:
       containers:
         - name: architect-agent
