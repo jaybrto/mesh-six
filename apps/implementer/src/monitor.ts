@@ -9,7 +9,6 @@ import { DaprClient } from "@dapr/dapr";
 import {
   DAPR_PUBSUB_NAME,
   TASK_RESULTS_TOPIC,
-  SESSION_BLOCKED_TOPIC,
   AUTH_SERVICE_APP_ID,
   detectAuthFailure,
   type TaskResult,
@@ -126,6 +125,11 @@ export class SessionMonitor {
 
     // --- Question detection ---
     if (!this.questionDetected) {
+      // Check if a previous answer was injected — reset if so
+      if (actorState.answerInjected) {
+        actorState.answerInjected = false;
+      }
+
       const questionMatch = QUESTION_PATTERN.exec(paneText);
       if (questionMatch) {
         const questionText = questionMatch[1].trim();
@@ -141,21 +145,43 @@ export class SessionMonitor {
           detailsJson: { questionId: question.id, questionText },
         });
 
-        // Publish session-blocked event via Dapr pub/sub
-        await daprClient.pubsub.publish(DAPR_PUBSUB_NAME, SESSION_BLOCKED_TOPIC, {
-          sessionId,
-          taskId,
-          questionId: question.id,
-          questionText,
-          issueNumber: actorState.issueNumber,
-          repoOwner: actorState.repoOwner,
-          repoName: actorState.repoName,
-          timestamp: new Date().toISOString(),
-        });
+        // Raise event on workflow instance via Dapr HTTP API
+        const { workflowId } = actorState;
+        if (workflowId) {
+          const eventChannel = this.getEventChannel();
+          const eventUrl = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0-alpha1/workflows/dapr/${workflowId}/raiseEvent/${eventChannel}`;
+          await fetch(eventUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              type: "question-detected",
+              questionText,
+              sessionId,
+            }),
+          }).catch((err) => log(`Failed to raise event on workflow ${workflowId}: ${err}`));
 
-        log(`Published session-blocked event for session ${sessionId}`);
+          log(`Raised ${eventChannel} event on workflow ${workflowId}`);
+        } else {
+          log(`No workflowId — falling back to pub/sub for session ${sessionId}`);
+          await daprClient.pubsub.publish(DAPR_PUBSUB_NAME, "session-blocked", {
+            sessionId,
+            taskId,
+            questionId: question.id,
+            questionText,
+            issueNumber: actorState.issueNumber,
+            repoOwner: actorState.repoOwner,
+            repoName: actorState.repoName,
+            timestamp: new Date().toISOString(),
+          });
+        }
         return;
       }
+    } else if (actorState.answerInjected) {
+      // Answer was injected, reset question detection for next question
+      this.questionDetected = false;
+      actorState.answerInjected = false;
+      await updateSessionStatus(sessionId, "running");
+      log(`Question detection reset after answer injection for session ${sessionId}`);
     }
 
     // Publish MQTT event for dashboard progress
@@ -163,6 +189,16 @@ export class SessionMonitor {
       sessionId,
       paneSnippet: paneText.slice(-200),
     }).catch(() => {});
+  }
+
+  /**
+   * Determine the event channel name based on what kind of session this is.
+   * The PM workflow listens on different channels per phase.
+   */
+  private getEventChannel(): string {
+    // Default to planning-event. Can be extended to support impl-event/qa-event
+    // based on additional context if a "phase" field is added to MonitorContext.
+    return "planning-event";
   }
 
   private async handleCompletion(success: boolean, errorMessage?: string): Promise<void> {
@@ -180,6 +216,22 @@ export class SessionMonitor {
       eventType: success ? "session_completed" : "session_failed",
       detailsJson: errorMessage ? { error: errorMessage } : undefined,
     });
+
+    // Raise completion/failure event on workflow
+    const { workflowId } = this.ctx.actorState;
+    if (workflowId) {
+      const eventChannel = this.getEventChannel();
+      const eventUrl = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0-alpha1/workflows/dapr/${workflowId}/raiseEvent/${eventChannel}`;
+      await fetch(eventUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          success
+            ? { type: "plan-complete", planContent: "" }
+            : { type: "session-failed", error: errorMessage || "Session failed" }
+        ),
+      }).catch((err) => log(`Failed to raise completion event: ${err}`));
+    }
 
     const result: TaskResult = {
       taskId,
