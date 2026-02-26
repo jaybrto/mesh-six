@@ -31,12 +31,14 @@ export interface SessionRow {
   issueNumber: number;
   repoOwner: string;
   repoName: string;
-  status: "idle" | "running" | "blocked" | "completed" | "failed";
+  status: "idle" | "running" | "blocked" | "completed" | "failed" | "interrupted";
   actorId?: string;
   tmuxWindow?: number;
   credentialBundleId?: string;
+  claudeSessionId?: string | null;
   startedAt?: string;
   completedAt?: string;
+  interruptedAt?: string | null;
   createdAt: string;
 }
 
@@ -71,7 +73,7 @@ export async function insertSession(params: {
 
 export async function updateSessionStatus(
   sessionId: string,
-  status: SessionRow["status"],
+  status: Exclude<SessionRow["status"], "interrupted">,
   extra?: {
     tmuxWindow?: number;
     credentialBundleId?: string;
@@ -234,4 +236,119 @@ export async function getSessionQuestions(sessionId: string): Promise<QuestionRo
     [sessionId]
   );
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// session resume / checkpoint support (migration 010)
+// ---------------------------------------------------------------------------
+
+/**
+ * Store the claude_session_id captured from CLI output for later --resume use.
+ */
+export async function updateClaudeSessionId(
+  sessionId: string,
+  claudeSessionId: string
+): Promise<void> {
+  const db = getPool();
+  await db.query(
+    `UPDATE implementation_sessions SET claude_session_id = $2 WHERE id = $1`,
+    [sessionId, claudeSessionId]
+  );
+}
+
+export interface CheckpointInsertParams {
+  sessionId: string;
+  checkpointType: "pre_commit" | "pre_pr" | "pre_merge" | "periodic" | "manual";
+  summary: string;
+  gitStatus?: string | null;
+  gitDiffStat?: string | null;
+  tmuxCapture?: string | null;
+  pendingActions?: unknown[];
+}
+
+export interface CheckpointRow {
+  id: number;
+  sessionId: string;
+  checkpointType: string;
+  summary: string;
+  gitStatus: string | null;
+  gitDiffStat: string | null;
+  tmuxCapture: string | null;
+  pendingActions: unknown[];
+  createdAt: string;
+}
+
+/**
+ * Insert a pre-action checkpoint snapshot.
+ */
+export async function insertCheckpoint(params: CheckpointInsertParams): Promise<CheckpointRow> {
+  const db = getPool();
+  const { rows } = await db.query<CheckpointRow>(
+    `INSERT INTO session_checkpoints
+       (session_id, checkpoint_type, summary, git_status, git_diff_stat, tmux_capture, pending_actions)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+     RETURNING
+       id,
+       session_id      AS "sessionId",
+       checkpoint_type AS "checkpointType",
+       summary,
+       git_status      AS "gitStatus",
+       git_diff_stat   AS "gitDiffStat",
+       tmux_capture    AS "tmuxCapture",
+       pending_actions AS "pendingActions",
+       created_at      AS "createdAt"`,
+    [
+      params.sessionId,
+      params.checkpointType,
+      params.summary,
+      params.gitStatus ?? null,
+      params.gitDiffStat ?? null,
+      params.tmuxCapture ?? null,
+      JSON.stringify(params.pendingActions ?? []),
+    ]
+  );
+  await db.query(
+    `UPDATE implementation_sessions SET last_checkpoint_at = now() WHERE id = $1`,
+    [params.sessionId]
+  );
+  return rows[0];
+}
+
+/**
+ * Retrieve the most recent checkpoint for a session.
+ */
+export async function getLatestCheckpoint(sessionId: string): Promise<CheckpointRow | null> {
+  const db = getPool();
+  const { rows } = await db.query<CheckpointRow>(
+    `SELECT
+       id,
+       session_id      AS "sessionId",
+       checkpoint_type AS "checkpointType",
+       summary,
+       git_status      AS "gitStatus",
+       git_diff_stat   AS "gitDiffStat",
+       tmux_capture    AS "tmuxCapture",
+       pending_actions AS "pendingActions",
+       created_at      AS "createdAt"
+     FROM session_checkpoints
+     WHERE session_id = $1
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [sessionId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Mark a session as interrupted during startup recovery.
+ */
+export async function markSessionInterrupted(sessionId: string): Promise<void> {
+  const db = getPool();
+  await db.query(
+    `UPDATE implementation_sessions
+     SET interrupted_at = now(),
+         status         = 'interrupted'
+     WHERE id = $1`,
+    [sessionId]
+  );
 }

@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-26: GWA Bug Fixes — Session Recovery, GitHub Comments, PR Filtering, Operational Scripts
+
+Parallel work across five areas: implementer session recovery with Claude `--resume`, GitHub issue comment integration for workflow status, PR/issue filtering in webhook-receiver, planning prompt templates, and a full suite of operational scripts and CronJobs.
+
+**@mesh-six/core@0.9.0**
+- `git.ts`: typed git operations library (`cloneRepo`, `createWorktree`, `removeWorktree`, `listWorktrees`, `getDiff`, `getStatus`, `createBranch`, `checkoutBranch`, `stash`, `stashPop`, `getCurrentBranch`, `getLatestCommit`, `GitError`)
+- `pr-filter.ts`: PR and issue filter logic (`shouldProcessIssue`, `shouldProcessPR`, `loadFilterConfigFromEnv`, `FilterConfig`, `IssueInfo`, `PRInfo`)
+- `comment-generator.ts`: LLM-powered GitHub comment generation (`generateComment`, `generateSessionSummary`, `formatStatusComment`, `CommentType`, `CommentOptions`, `SessionSummaryInput`)
+- `github.ts`: new `GitHubProjectClient` methods — `createOrUpdateComment`, `findBotComment`, `updateProjectItemField`
+- `git.test.ts`: comprehensive tests for all git operations (mock-based + real repo integration tests)
+- `pr-filter.test.ts`: full coverage for `shouldProcessIssue`, `shouldProcessPR`, and `loadFilterConfigFromEnv`
+
+**@mesh-six/implementer@0.3.0**
+- `checkpoint.ts`: pre-action state snapshots into `session_checkpoints` table (`createCheckpoint`, `getLatestCheckpoint`, `restoreFromCheckpoint`)
+- `recovery.ts`: pod startup recovery — marks interrupted sessions, finds resumable sessions with `claude_session_id`, builds resume context from latest checkpoint
+- `github-integration.ts`: PR creation via `gh` CLI and structured comment posting (`createPR`, `postCompletionComment`, `postProgressUpdate`)
+- `actor.ts`: `claudeSessionId` field on `ActorState`, `storeClaudeSessionId` method, `--resume` support in `startSession`, `createPreActionCheckpoint` method using `@mesh-six/core` git utilities
+- `session-db.ts`: `updateClaudeSessionId`, `insertCheckpoint`, `getLatestCheckpoint`, `markSessionInterrupted` — session resume + checkpoint DB operations
+- `podStartupRecovery` exported from `actor.ts` — calls `recoverInterruptedSessions` on pod start
+- Migration `010_session_resume_fields.sql`: `claude_session_id`, `last_checkpoint_at`, `interrupted_at` columns + `session_checkpoints` table
+
+**@mesh-six/project-manager@0.6.0**
+- `comment-activities.ts`: workflow activities for GitHub issue comments (`postStatusComment`, `postProgressComment`, `syncPlanToIssue`, `updateProjectCustomFields`)
+- `plan-templates.ts`: markdown template loading and instantiation (`loadTemplate`, `buildTemplate`, `instantiatePlan`, `formatPlanForIssue`, `parsePlanFromComment`)
+- `workflow.ts`: `postStatusCommentActivity` calls at PLANNING, IN_PROGRESS, QA, REVIEW, and ACCEPTED transitions; `syncPlanToIssueActivity` on plan approval; `buildTemplate("prompt", ...)` for planning prompt construction; `formatPlanForIssue` on plan rejection comments; `updateProjectCustomFieldsActivity` for session field tracking
+- Templates: `templates/plans/plan.md`, `templates/plans/prompt.md`, `templates/plans/checklist.md`, `templates/plans/decisions.md`
+
+**@mesh-six/webhook-receiver@0.2.0**
+- Issue/PR filtering via `shouldProcessIssue` and `loadFilterConfigFromEnv` from `@mesh-six/core`
+- Filter applied to both webhook-triggered `new-todo` events and polling-discovered items
+- Supports `FILTER_ALLOWED_AUTHORS`, `FILTER_REQUIRED_LABELS`, `FILTER_EXCLUDE_LABELS`, `FILTER_BRANCH_PATTERNS`, `FILTER_EXCLUDE_DRAFTS` env vars
+
+**Operational Scripts**
+- `scripts/cleanup.ts`: remove stale completed/failed sessions and purge old checkpoints/activity logs (with `--dry-run`, `--retention-days`, `--log-retention-days`)
+- `scripts/credential-backup.ts`: export credentials to MinIO via `mc` CLI with pruning by retention days
+- `scripts/onboard-repo.ts`: onboard a GitHub repo — creates Projects v2, custom fields, links repo, inserts into `repo_registry`
+- `scripts/setup-project.ts`: standalone GitHub Projects v2 setup with standard mesh-six columns and fields
+- `scripts/debug-db.ts`: database diagnostics — active workflows, sessions, pending questions, architect events, health counts
+- `scripts/credential-history.ts`: credential expiry status report per project with expiring-soon warnings
+
+**K8s CronJobs**
+- `k8s/base/cleanup-cronjob/`: daily CronJob (`0 3 * * *`) running `scripts/cleanup.ts` with `--retention-days 7 --log-retention-days 30`
+- `k8s/base/credential-backup-cronjob/`: every-6h CronJob (`0 */6 * * *`) running `scripts/credential-backup.ts`
+- `k8s/base/kustomization.yaml`: added `cleanup-cronjob/` and `credential-backup-cronjob/` to resources
+
 ### Added - 2026-02-26: GWA Migration — Event-Driven Workflow with Architect Actor
 
 **@mesh-six/core@0.8.0**

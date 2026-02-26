@@ -171,6 +171,46 @@ export {
   type CLIHookEvent,
 } from "./llm-service.js";
 
+// PR and issue filtering
+export {
+  shouldProcessIssue,
+  shouldProcessPR,
+  loadFilterConfigFromEnv,
+  type FilterConfig,
+  type IssueInfo,
+  type PRInfo,
+} from "./pr-filter.js";
+
+// Git utilities
+export {
+  cloneRepo,
+  createWorktree,
+  removeWorktree,
+  listWorktrees,
+  getDiff,
+  getStatus,
+  createBranch,
+  checkoutBranch,
+  stash,
+  stashPop,
+  getCurrentBranch,
+  getLatestCommit,
+  GitError,
+  type WorktreeInfo,
+  type GitStatus,
+  type CloneOptions,
+} from "./git.js";
+
+// Comment generation
+export {
+  generateComment,
+  generateSessionSummary,
+  formatStatusComment,
+  type CommentType,
+  type CommentOptions,
+  type SessionSummaryInput,
+} from "./comment-generator.js";
+
 // Architect Actor
 export {
   ARCHITECT_ACTOR_TYPE,

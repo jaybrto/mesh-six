@@ -30,6 +30,11 @@ import type {
   HumanAnswerPayload,
 } from "@mesh-six/core";
 
+import {
+  buildTemplate,
+  formatPlanForIssue,
+} from "./plan-templates.js";
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -337,6 +342,40 @@ export interface InitializeArchitectActorInput {
   issueTitle: string;
 }
 
+
+// ---------------------------------------------------------------------------
+// Comment activity types
+// ---------------------------------------------------------------------------
+
+export interface PostStatusCommentInput {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  status: string;
+  details: Record<string, unknown>;
+}
+
+export interface PostProgressCommentInput {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  phase: string;
+  progress: string;
+}
+
+export interface SyncPlanToIssueInput {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  planSummary: string;
+}
+
+export interface UpdateProjectCustomFieldsInput {
+  projectId: string;
+  itemId: string;
+  fields: Record<string, string>;
+}
+
 // ---------------------------------------------------------------------------
 // Activity type alias
 // ---------------------------------------------------------------------------
@@ -517,6 +556,34 @@ export let initializeArchitectActorActivity: ActivityFn<
   throw new Error("initializeArchitectActorActivity not initialized");
 };
 
+export let postStatusCommentActivity: ActivityFn<
+  PostStatusCommentInput,
+  void
+> = async () => {
+  throw new Error('postStatusCommentActivity not initialized');
+};
+
+export let postProgressCommentActivity: ActivityFn<
+  PostProgressCommentInput,
+  void
+> = async () => {
+  throw new Error('postProgressCommentActivity not initialized');
+};
+
+export let syncPlanToIssueActivity: ActivityFn<
+  SyncPlanToIssueInput,
+  void
+> = async () => {
+  throw new Error('syncPlanToIssueActivity not initialized');
+};
+
+export let updateProjectCustomFieldsActivity: ActivityFn<
+  UpdateProjectCustomFieldsInput,
+  void
+> = async () => {
+  throw new Error('updateProjectCustomFieldsActivity not initialized');
+};
+
 // ---------------------------------------------------------------------------
 // Main Workflow
 // ---------------------------------------------------------------------------
@@ -610,6 +677,14 @@ export const projectWorkflow: TWorkflow = async function* (
 
   console.log(`[Workflow] Issue #${issueNumber} moved to Planning`);
 
+  yield ctx.callActivity(postStatusCommentActivity, {
+    owner: repoOwner,
+    repo: repoName,
+    issueNumber,
+    status: "PLANNING",
+    details: { workflowId, projectItemId },
+  });
+
   // =====================================================================
   // PLANNING phase (card is in Planning)
   // =====================================================================
@@ -651,6 +726,18 @@ export const projectWorkflow: TWorkflow = async function* (
       issueTitle,
     });
 
+    // Build planning prompt from template (falls back to inline string on error)
+    const planningPromptBase = await buildTemplate("prompt", {
+      ISSUE_NUMBER: issueNumber,
+      ISSUE_TITLE: issueTitle,
+      REPO_OWNER: repoOwner,
+      REPO_NAME: repoName,
+      ISSUE_BODY: `Issue #${issueNumber}: ${issueTitle}`,
+    });
+    const planningPrompt = planningPromptBase ||
+      `Plan the implementation for issue #${issueNumber}: ${issueTitle}`;
+    const implementationPrompt = `${planningPrompt}\n\nArchitect guidance:\n${architectResult.guidance}`;
+
     // Start planning session via ImplementerActor
     const planSession: StartSessionOutput = yield ctx.callActivity(
       startSessionActivity,
@@ -659,7 +746,7 @@ export const projectWorkflow: TWorkflow = async function* (
         repoOwner,
         repoName,
         workflowId,
-        implementationPrompt: `Plan the implementation for issue #${issueNumber}: ${issueTitle}\n\nArchitect guidance:\n${architectResult.guidance}`,
+        implementationPrompt,
         branch: `issue-${issueNumber}`,
       }
     );
@@ -670,6 +757,18 @@ export const projectWorkflow: TWorkflow = async function* (
         reason: `Planning session failed to start: ${planSession.error}`,
       });
       return { issueNumber, repoOwner, repoName, finalPhase: "FAILED" as WorkflowPhase };
+    }
+
+    // Update project custom fields with session info
+    const SESSION_FIELD_ID = process.env.GITHUB_SESSION_FIELD_ID ?? "";
+    if (projectItemId && SESSION_FIELD_ID) {
+      yield ctx.callActivity(updateProjectCustomFieldsActivity, {
+        projectId: process.env.GITHUB_PROJECT_ID ?? "",
+        itemId: projectItemId,
+        fields: {
+          [SESSION_FIELD_ID]: planSession.sessionId,
+        },
+      });
     }
 
     // Event-driven planning loop
@@ -754,10 +853,18 @@ export const projectWorkflow: TWorkflow = async function* (
         if (planReview.approved) {
           planApproved = true;
           console.log(`[Workflow] Plan approved for issue #${issueNumber}`);
+          // Sync approved plan to the issue as a comment
+          yield ctx.callActivity(syncPlanToIssueActivity, {
+            owner: repoOwner,
+            repo: repoName,
+            issueNumber,
+            planSummary: planEvent.planContent,
+          });
         } else {
+          const formattedPlan = formatPlanForIssue(planEvent.planContent);
           yield ctx.callActivity(addCommentActivity, {
             issueNumber, repoOwner, repoName,
-            body: `**Plan Review — Revision Needed** (confidence: ${(planReview.confidence * 100).toFixed(0)}%)\n\n${planReview.feedback}`,
+            body: `**Plan Review — Revision Needed** (confidence: ${(planReview.confidence * 100).toFixed(0)}%)\n\n${planReview.feedback}\n\n${formattedPlan}`,
           });
           yield ctx.callActivity(incrementRetryCycleActivity, {
             workflowId,
@@ -789,6 +896,14 @@ export const projectWorkflow: TWorkflow = async function* (
   }
 
   console.log(`[Workflow] Issue #${issueNumber} moved to In Progress`);
+
+  yield ctx.callActivity(postStatusCommentActivity, {
+    owner: repoOwner,
+    repo: repoName,
+    issueNumber,
+    status: "IN_PROGRESS",
+    details: { workflowId, projectItemId },
+  });
 
   // =====================================================================
   // IMPLEMENTATION phase (card is in In Progress)
@@ -859,6 +974,14 @@ export const projectWorkflow: TWorkflow = async function* (
   });
 
   console.log(`[Workflow] Issue #${issueNumber} moved to QA`);
+
+  yield ctx.callActivity(postStatusCommentActivity, {
+    owner: repoOwner,
+    repo: repoName,
+    issueNumber,
+    status: "QA",
+    details: { workflowId, prNumber: prNumber ?? undefined },
+  });
 
   // =====================================================================
   // QA phase (card is in QA)
@@ -961,6 +1084,14 @@ export const projectWorkflow: TWorkflow = async function* (
 
   console.log(`[Workflow] Issue #${issueNumber} moved to Review`);
 
+  yield ctx.callActivity(postStatusCommentActivity, {
+    owner: repoOwner,
+    repo: repoName,
+    issueNumber,
+    status: "REVIEW",
+    details: { workflowId, prNumber: prNumber ?? undefined },
+  });
+
   // =====================================================================
   // REVIEW phase (card is in Review)
   // =====================================================================
@@ -1047,6 +1178,14 @@ export const projectWorkflow: TWorkflow = async function* (
 
   console.log(`[Workflow] Issue #${issueNumber} moved to Done`);
 
+  yield ctx.callActivity(postStatusCommentActivity, {
+    owner: repoOwner,
+    repo: repoName,
+    issueNumber,
+    status: "ACCEPTED",
+    details: { workflowId, prNumber: prNumber ?? undefined },
+  });
+
   // =====================================================================
   // ACCEPTED — terminal success
   // =====================================================================
@@ -1103,6 +1242,10 @@ export interface WorkflowActivityImplementations {
   notifyHumanQuestion: typeof notifyHumanQuestionActivity;
   processHumanAnswer: typeof processHumanAnswerActivity;
   initializeArchitectActor: typeof initializeArchitectActorActivity;
+  postStatusComment: typeof postStatusCommentActivity;
+  postProgressComment: typeof postProgressCommentActivity;
+  syncPlanToIssue: typeof syncPlanToIssueActivity;
+  updateProjectCustomFields: typeof updateProjectCustomFieldsActivity;
 }
 
 // ---------------------------------------------------------------------------
@@ -1139,6 +1282,10 @@ export function createWorkflowRuntime(
   notifyHumanQuestionActivity = activityImpls.notifyHumanQuestion;
   processHumanAnswerActivity = activityImpls.processHumanAnswer;
   initializeArchitectActorActivity = activityImpls.initializeArchitectActor;
+  postStatusCommentActivity = activityImpls.postStatusComment;
+  postProgressCommentActivity = activityImpls.postProgressComment;
+  syncPlanToIssueActivity = activityImpls.syncPlanToIssue;
+  updateProjectCustomFieldsActivity = activityImpls.updateProjectCustomFields;
 
   const runtime = new WorkflowRuntime({
     daprHost: DAPR_HOST,
@@ -1175,6 +1322,10 @@ export function createWorkflowRuntime(
   runtime.registerActivity(notifyHumanQuestionActivity);
   runtime.registerActivity(processHumanAnswerActivity);
   runtime.registerActivity(initializeArchitectActorActivity);
+  runtime.registerActivity(postStatusCommentActivity);
+  runtime.registerActivity(postProgressCommentActivity);
+  runtime.registerActivity(syncPlanToIssueActivity);
+  runtime.registerActivity(updateProjectCustomFieldsActivity);
 
   return runtime;
 }

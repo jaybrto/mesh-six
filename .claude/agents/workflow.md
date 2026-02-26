@@ -28,21 +28,22 @@ You develop the project-manager's Dapr Workflow state machine and related workfl
 The project-manager implements a full project lifecycle:
 
 ```
-CREATE → PLANNING → REVIEW → IN_PROGRESS → QA → DEPLOY → VALIDATE → ACCEPTED
-                                                                    ↘ FAILED
+INTAKE → PLANNING → IMPLEMENTATION → QA → REVIEW → ACCEPTED
+                                              ↘ FAILED
 
 Failure paths (loop back):
   REVIEW → PLANNING (plan inadequate)
   QA → PLANNING (tests fail)
-  VALIDATE → PLANNING (deployed service fails)
 ```
 
 ## Key Files
 
 - `apps/project-manager/src/index.ts` — Hono server, Dapr pub/sub handlers, MQTT publishing, activity implementations (complexity gate, architect actor invocation, implementer session start, answer injection, ntfy notification, retry budget DB ops, workflow state lookups via PostgreSQL), ntfy reply webhook (`/ntfy-reply`)
-- `apps/project-manager/src/workflow.ts` — Dapr Workflow definition, event-driven state transitions via `waitForExternalEvent()`, architect actor question loop, complexity gate routing
+- `apps/project-manager/src/workflow.ts` — Dapr Workflow definition, event-driven state transitions via `waitForExternalEvent()`, architect actor question loop, complexity gate routing, GitHub comment activities at each phase transition
+- `apps/project-manager/src/comment-activities.ts` — GitHub issue comment activities: `postStatusComment`, `postProgressComment`, `syncPlanToIssue`, `updateProjectCustomFields`
+- `apps/project-manager/src/plan-templates.ts` — planning template loading and instantiation: `buildTemplate`, `instantiatePlan`, `formatPlanForIssue`, `parsePlanFromComment`; templates in `templates/plans/`
 - `packages/core/src/context.ts` — `buildAgentContext()` and `transitionClose()` used by PM
-- `packages/core/src/github.ts` — `GitHubProjectClient` with `TokenBucket` rate limiter
+- `packages/core/src/github.ts` — `GitHubProjectClient` with `TokenBucket` rate limiter; `createOrUpdateComment`/`findBotComment` for idempotent issue comments
 
 ## Context Management Pattern
 

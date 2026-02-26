@@ -8,6 +8,8 @@ import {
   type BoardEventType,
   type DaprSubscription,
   type ProjectItem,
+  shouldProcessIssue,
+  loadFilterConfigFromEnv,
 } from "@mesh-six/core";
 
 // --- Configuration ---
@@ -32,6 +34,9 @@ const ghClient = new GitHubProjectClient({
   projectId: GITHUB_PROJECT_ID,
   statusFieldId: GITHUB_STATUS_FIELD_ID,
 });
+
+// --- PR/Issue filter config (loaded once at startup from env) ---
+const filterConfig = loadFilterConfigFromEnv();
 
 // --- Webhook dedup (in-memory, keyed by X-GitHub-Delivery) ---
 const deliveryDedup = new Map<string, number>();
@@ -278,6 +283,15 @@ app.post("/webhooks/github", async (c) => {
   // 6. Classify and publish
   const event = classifyTransition(action, effectiveFrom, effectiveTo, itemInfo);
   if (event) {
+    // Apply issue filter for new-todo events
+    if (event.type === "new-todo") {
+      const issueInfo = { labels: [] as string[], author: "" };
+      if (!shouldProcessIssue(issueInfo, filterConfig)) {
+        console.log(`[webhook-receiver] Filtered out issue #${event.issueNumber} by filter rules`);
+        return c.json({ status: "filtered" }, 200);
+      }
+    }
+
     try {
       await publishBoardEvent(event);
     } catch (err) {
@@ -322,6 +336,13 @@ async function pollTodoItems(): Promise<void> {
         // Check for self-move before publishing
         if (await isSelfMove(item.id)) {
           console.log(`[webhook-receiver] Self-move detected for polled item ${item.id}, skipping`);
+          continue;
+        }
+
+        // Apply issue filter
+        const issueInfo = { labels: [] as string[], author: "" };
+        if (!shouldProcessIssue(issueInfo, filterConfig)) {
+          console.log(`[webhook-receiver] Filtered out issue #${item.issueNumber} by filter rules`);
           continue;
         }
 

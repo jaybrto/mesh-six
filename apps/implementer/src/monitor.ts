@@ -19,6 +19,7 @@ import {
   updateSessionStatus,
   insertActivityLog,
   insertQuestion,
+  updateClaudeSessionId,
 } from "./session-db.js";
 import type { ActorState } from "./actor.js";
 
@@ -29,6 +30,15 @@ const MONITOR_INTERVAL_MS = 5_000;
 // Question detection pattern — matches lines ending with "?" that look like
 // Claude asking for clarification.
 const QUESTION_PATTERN = /(?:^|\n)(?:Claude|Assistant)?:?\s*([^.!]+\?\s*)$/im;
+
+// Claude CLI session ID patterns emitted at startup or resume.
+// Examples: "Session: abc-def-123", "Resuming session abc-def-123",
+//           "claude --resume abc-def-123"
+const CLAUDE_SESSION_ID_PATTERNS = [
+  /(?:^|\n)Session:\s*([a-zA-Z0-9_-]{8,})/m,
+  /Resuming session\s+([a-zA-Z0-9_-]{8,})/im,
+  /--resume\s+([a-zA-Z0-9_-]{8,})/im,
+];
 
 // Completion detection — Claude CLI exits and prints a summary line.
 const COMPLETION_PATTERNS = [
@@ -56,6 +66,7 @@ export class SessionMonitor {
   private ctx: MonitorContext;
   private lastCaptureHash = "";
   private questionDetected = false;
+  private claudeSessionIdCaptured = false;
 
   constructor(ctx: MonitorContext) {
     this.ctx = ctx;
@@ -97,6 +108,27 @@ export class SessionMonitor {
     const hash = simpleHash(paneText);
     if (hash === this.lastCaptureHash) return;
     this.lastCaptureHash = hash;
+
+    // --- Claude session ID capture ---
+    if (!this.claudeSessionIdCaptured) {
+      for (const pattern of CLAUDE_SESSION_ID_PATTERNS) {
+        const match = pattern.exec(paneText);
+        if (match) {
+          const claudeSessionId = match[1];
+          this.claudeSessionIdCaptured = true;
+          log(`Captured claude_session_id for session ${sessionId}: ${claudeSessionId}`);
+          await updateClaudeSessionId(sessionId, claudeSessionId).catch((err) =>
+            log(`Failed to persist claude_session_id: ${err}`)
+          );
+          await insertActivityLog({
+            sessionId,
+            eventType: "claude_session_id_captured",
+            detailsJson: { claudeSessionId },
+          }).catch(() => {});
+          break;
+        }
+      }
+    }
 
     // --- Auth failure detection ---
     if (detectAuthFailure(paneText)) {

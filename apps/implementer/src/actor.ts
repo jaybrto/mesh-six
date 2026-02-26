@@ -11,6 +11,9 @@ import {
   type ImplementationSession,
   type ProvisionResponse,
   AUTH_SERVICE_APP_ID,
+  createWorktree,
+  removeWorktree,
+  GitError,
 } from "@mesh-six/core";
 import {
   DAPR_HOST,
@@ -31,8 +34,12 @@ import {
   insertSession,
   updateSessionStatus,
   insertActivityLog,
+  updateClaudeSessionId,
 } from "./session-db.js";
-import { matchKnownDialog, looksNormal } from "@mesh-six/core";
+import { createCheckpoint, restoreFromCheckpoint } from "./checkpoint.js";
+import { recoverInterruptedSessions } from "./recovery.js";
+import { matchKnownDialog, looksNormal, getStatus, getDiff } from "@mesh-six/core";
+import pg from "pg";
 
 const log = (msg: string) => console.log(`[${AGENT_ID}][actor] ${msg}`);
 
@@ -55,6 +62,7 @@ export interface ActorState {
   startedAt?: string;
   workflowId?: string;
   answerInjected?: boolean;
+  claudeSessionId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +138,20 @@ export class ImplementerActor {
   }
 
   /**
+   * Store the claude_session_id captured from CLI output.
+   * Called by SessionMonitor when it detects a session ID in pane output.
+   */
+  async storeClaudeSessionId(claudeSessionId: string): Promise<void> {
+    if (!this.state) return;
+    this.state.claudeSessionId = claudeSessionId;
+    await updateClaudeSessionId(this.state.sessionId, claudeSessionId).catch((err) =>
+      log(`Failed to persist claudeSessionId: ${err}`)
+    );
+  }
+
+  /**
    * Start a Claude CLI session inside tmux for the given prompt.
+   * If the actor state has a previous claudeSessionId, passes --resume to the CLI.
    */
   async startSession(params: {
     implementationPrompt: string;
@@ -139,7 +160,7 @@ export class ImplementerActor {
       return { ok: false, error: "Actor not activated" };
     }
 
-    const { tmuxSessionName, worktreeDir, sessionId } = this.state;
+    const { tmuxSessionName, worktreeDir, sessionId, claudeSessionId } = this.state;
 
     // Kill any existing tmux session for this issue
     if (await sessionExists(tmuxSessionName)) {
@@ -157,9 +178,16 @@ export class ImplementerActor {
     await sendCommand(tmuxSessionName, `export CLAUDE_CONFIG_DIR=${CLAUDE_SESSION_DIR}`);
     await Bun.sleep(100);
 
-    // Start Claude CLI in non-interactive mode with the implementation prompt
+    // Build the claude command — use --resume if we have a prior session ID
     const escapedPrompt = params.implementationPrompt.replace(/'/g, "'\\''");
-    await sendCommand(tmuxSessionName, `claude -p '${escapedPrompt}'`);
+    let claudeCmd: string;
+    if (claudeSessionId) {
+      log(`Resuming previous claude session ${claudeSessionId} for ${sessionId}`);
+      claudeCmd = `claude --resume ${claudeSessionId} -p '${escapedPrompt}'`;
+    } else {
+      claudeCmd = `claude -p '${escapedPrompt}'`;
+    }
+    await sendCommand(tmuxSessionName, claudeCmd);
 
     // Brief wait for CLI to start, then handle any startup dialogs
     await Bun.sleep(2000);
@@ -219,6 +247,57 @@ export class ImplementerActor {
       log(`Failed to inject answer: ${err}`);
       return { ok: false, error: String(err) };
     }
+  }
+
+  /**
+   * Create a pre-action checkpoint capturing git state and tmux pane output.
+   * Should be called before commit or PR creation to enable recovery.
+   */
+  async createPreActionCheckpoint(
+    type: "pre_commit" | "pre_pr" | "pre_merge" | "periodic" | "manual",
+    summary: string,
+    pool: pg.Pool
+  ): Promise<void> {
+    if (!this.state) return;
+
+    const { sessionId, worktreeDir, tmuxSessionName } = this.state;
+
+    let gitStatusText: string | undefined;
+    let gitDiffStat: string | undefined;
+    let tmuxCapture: string | undefined;
+
+    try {
+      const statusObj = await getStatus(worktreeDir);
+      gitStatusText = [
+        ...statusObj.staged.map((f) => `A  ${f}`),
+        ...statusObj.modified.map((f) => ` M ${f}`),
+        ...statusObj.deleted.map((f) => ` D ${f}`),
+        ...statusObj.untracked.map((f) => `?? ${f}`),
+      ].join("\n");
+    } catch {
+      // Non-fatal — git may not be initialized yet
+    }
+
+    try {
+      gitDiffStat = await getDiff(worktreeDir, { stat: true });
+    } catch {
+      // Non-fatal
+    }
+
+    try {
+      tmuxCapture = await capturePane(tmuxSessionName, 50);
+    } catch {
+      // Non-fatal
+    }
+
+    await createCheckpoint(pool, sessionId, type, {
+      summary,
+      gitStatus: gitStatusText,
+      gitDiffStat,
+      tmuxCapture,
+    }).catch((err) => log(`Failed to create checkpoint: ${err}`));
+
+    log(`Checkpoint (${type}) created for session ${sessionId}`);
   }
 
   /**
@@ -337,24 +416,16 @@ export class ImplementerActor {
 
     // Remove existing worktree if stale
     if (existsSync(worktreeDir)) {
-      const rmProc = Bun.spawn(
-        ["git", "--git-dir", bareRepoDir, "worktree", "remove", "--force", worktreeDir],
-        { stdout: "pipe", stderr: "pipe" }
-      );
-      await rmProc.exited;
+      await removeWorktree(bareRepoDir, worktreeDir);
     }
 
     // Create worktree for the issue branch
     log(`Creating worktree at ${worktreeDir} for branch ${branch}`);
-    const wtProc = Bun.spawn(
-      ["git", "--git-dir", bareRepoDir, "worktree", "add", worktreeDir, branch],
-      { stdout: "pipe", stderr: "pipe" }
-    );
-    const wtExit = await wtProc.exited;
-    if (wtExit !== 0) {
-      const stderr = await new Response(wtProc.stderr).text();
-      // Branch may not exist yet — create it from main
-      if (stderr.includes("invalid reference") || stderr.includes("not a commit")) {
+    try {
+      await createWorktree(bareRepoDir, worktreeDir, branch);
+    } catch (err) {
+      if (err instanceof GitError && (err.stderr.includes("invalid reference") || err.stderr.includes("not a commit"))) {
+        // Branch may not exist yet — create it from main
         log(`Branch ${branch} not found, creating from main`);
         const createProc = Bun.spawn(
           ["git", "--git-dir", bareRepoDir, "worktree", "add", "-b", branch, worktreeDir, "origin/main"],
@@ -366,7 +437,7 @@ export class ImplementerActor {
           throw new Error(`git worktree add (new branch) failed: ${createStderr.trim()}`);
         }
       } else {
-        throw new Error(`git worktree add failed: ${stderr.trim()}`);
+        throw err;
       }
     }
   }
@@ -432,4 +503,32 @@ export function getActor(actorId: string): ImplementerActor | undefined {
 
 export function removeActor(actorId: string): void {
   actors.delete(actorId);
+}
+
+// ---------------------------------------------------------------------------
+// Pod startup recovery
+// ---------------------------------------------------------------------------
+
+/**
+ * On pod startup, mark any sessions left in running/blocked state as interrupted.
+ * Should be called once from the service entrypoint before accepting requests.
+ */
+export async function podStartupRecovery(pool: pg.Pool): Promise<void> {
+  try {
+    const interrupted = await recoverInterruptedSessions(pool);
+    if (interrupted.length === 0) {
+      log("Startup recovery: no interrupted sessions found");
+      return;
+    }
+    log(`Startup recovery: marked ${interrupted.length} session(s) as interrupted`);
+    for (const s of interrupted) {
+      log(
+        `  - session ${s.id} (issue #${s.issueNumber} ${s.repoOwner}/${s.repoName})` +
+          (s.claudeSessionId ? ` [resumable: ${s.claudeSessionId}]` : " [no resume token]")
+      );
+    }
+  } catch (err) {
+    // Recovery failure must not block startup
+    log(`Startup recovery error (non-fatal): ${err}`);
+  }
 }

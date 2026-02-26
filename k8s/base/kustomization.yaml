@@ -31,6 +31,8 @@ resources:
   - llm-service/
   - auth-service/
   - implementer/
+  - cleanup-cronjob/
+  - credential-backup-cronjob/
 
 commonLabels:
   app.kubernetes.io/part-of: mesh-six

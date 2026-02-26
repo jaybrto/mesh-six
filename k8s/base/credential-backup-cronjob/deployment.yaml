@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mesh-six-credential-backup
+  namespace: mesh-six
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: registry.bto.bar/jaybrto/mesh-six-scripts:latest
+              command: ["bun", "run", "scripts/credential-backup.ts"]
+              envFrom:
+                - secretRef:
+                    name: mesh-six-env
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"

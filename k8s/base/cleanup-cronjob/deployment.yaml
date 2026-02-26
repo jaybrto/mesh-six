@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mesh-six-cleanup
+  namespace: mesh-six
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: cleanup
+              image: registry.bto.bar/jaybrto/mesh-six-scripts:latest
+              command: ["bun", "run", "scripts/cleanup.ts"]
+              args:
+                - "--retention-days"
+                - "7"
+                - "--log-retention-days"
+                - "30"
+              envFrom:
+                - secretRef:
+                    name: mesh-six-env
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"

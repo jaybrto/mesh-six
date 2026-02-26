@@ -34,9 +34,12 @@ packages/core/src/
 ├── memory.ts           # AgentMemory — Mem0 client wrapper (mem0ai + pgvector + Ollama)
 ├── context.ts          # buildAgentContext() + transitionClose() — context builder + reflect-before-reset
 ├── llm.ts              # tracedChatCompletion, chatCompletionWithSchema — LiteLLM OpenAI-compatible
-├── github.ts           # GitHubProjectClient + TokenBucket rate limiter — GitHub Projects GraphQL
+├── github.ts           # GitHubProjectClient + TokenBucket rate limiter — GitHub Projects GraphQL + createOrUpdateComment/findBotComment
 ├── credentials.ts      # Credential utilities — isCredentialExpired, buildCredentialsJson, etc.
-└── dialog-handler.ts   # matchKnownDialog, parseDialogResponse — Claude CLI dialog detection
+├── dialog-handler.ts   # matchKnownDialog, parseDialogResponse — Claude CLI dialog detection
+├── git.ts              # Typed git operations — createWorktree, removeWorktree, listWorktrees, getStatus, getDiff, GitError, etc.
+├── pr-filter.ts        # PR/issue filtering — shouldProcessIssue, shouldProcessPR, loadFilterConfigFromEnv
+└── comment-generator.ts # LLM-powered GitHub comment generation — generateComment, formatStatusComment, generateSessionSummary
 ```
 
 ## Key Interfaces (from types.ts)

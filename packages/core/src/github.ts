@@ -411,4 +411,112 @@ export class GitHubProjectClient {
     });
     return { number: data.number, url: data.html_url };
   }
+
+  /**
+   * Update a project item's custom field value via GraphQL mutation.
+   */
+  async updateProjectItemField(
+    itemId: string,
+    fieldId: string,
+    value: string | number
+  ): Promise<void> {
+    await this.rateLimit();
+    const fieldValue =
+      typeof value === "number"
+        ? { number: value }
+        : { text: value };
+
+    await this.gql(
+      `mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
+        updateProjectV2ItemFieldValue(input: {
+          projectId: $projectId,
+          itemId: $itemId,
+          fieldId: $fieldId,
+          value: $value
+        }) {
+          projectV2Item {
+            id
+          }
+        }
+      }`,
+      {
+        projectId: this.projectId,
+        itemId,
+        fieldId,
+        value: fieldValue,
+      }
+    );
+  }
+
+  /**
+   * Create or update a comment on a GitHub issue.
+   * If commentId is provided, the existing comment is updated; otherwise a new comment is created.
+   * Returns the comment ID.
+   */
+  async createOrUpdateComment(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    body: string,
+    commentId?: number
+  ): Promise<number> {
+    await this.rateLimit();
+
+    if (commentId !== undefined) {
+      const { data } = await this.rest.issues.updateComment({
+        owner,
+        repo,
+        comment_id: commentId,
+        body,
+      });
+      return data.id;
+    }
+
+    const { data } = await this.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body,
+    });
+    return data.id;
+  }
+
+  /**
+   * Search issue comments for one containing the given hidden HTML marker.
+   * Returns the comment ID if found, or null if not found.
+   */
+  async findBotComment(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    marker: string
+  ): Promise<number | null> {
+    await this.rateLimit();
+
+    const markerTag = `<!-- ${marker} -->`;
+    let page = 1;
+
+    while (true) {
+      const { data } = await this.rest.issues.listComments({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        per_page: 100,
+        page,
+      });
+
+      if (data.length === 0) break;
+
+      for (const comment of data) {
+        if ((comment.body ?? "").includes(markerTag)) {
+          return comment.id;
+        }
+      }
+
+      if (data.length < 100) break;
+      page++;
+    }
+
+    return null;
+  }
 }

@@ -44,7 +44,17 @@ import {
   type NotifyHumanQuestionInput,
   type ProcessHumanAnswerInput,
   type InitializeArchitectActorInput,
+  type PostStatusCommentInput,
+  type PostProgressCommentInput,
+  type SyncPlanToIssueInput,
+  type UpdateProjectCustomFieldsInput,
 } from "./workflow.js";
+import {
+  postStatusComment,
+  postProgressComment,
+  syncPlanToIssue,
+  updateProjectCustomFields,
+} from "./comment-activities.js";
 
 // --- Configuration ---
 const AGENT_ID = process.env.AGENT_ID || "project-manager";
@@ -1925,6 +1935,22 @@ Categories:
             issueTitle: input.issueTitle,
           }),
         });
+      },
+
+      postStatusComment: async (ctx, input: PostStatusCommentInput) => {
+        await postStatusComment(ctx, input);
+      },
+
+      postProgressComment: async (ctx, input: PostProgressCommentInput) => {
+        await postProgressComment(ctx, input);
+      },
+
+      syncPlanToIssue: async (ctx, input: SyncPlanToIssueInput) => {
+        await syncPlanToIssue(ctx, input);
+      },
+
+      updateProjectCustomFields: async (ctx, input: UpdateProjectCustomFieldsInput) => {
+        await updateProjectCustomFields(ctx, input);
       },
     };
 
