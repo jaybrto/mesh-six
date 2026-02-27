@@ -140,7 +140,11 @@ async function run() {
       node(id: $projectId) {
         ... on ProjectV2 {
           fields(first: 20) {
-            nodes { id name __typename }
+            nodes {
+              ... on ProjectV2Field { id name __typename }
+              ... on ProjectV2IterationField { id name __typename }
+              ... on ProjectV2SingleSelectField { id name __typename }
+            }
           }
         }
       }
@@ -208,16 +212,21 @@ async function run() {
 
   // --- 8. Insert into repo_registry ---
   console.log(`\nRegistering ${ownerRepo} in repo_registry...`);
+  const metadata = {
+    github_project_id: project.id,
+    github_project_url: project.url,
+    github_project_number: project.number,
+    field_ids: createdFieldIds,
+  };
   await pool.query(`
     INSERT INTO repo_registry (
-      owner, name, github_project_id, github_project_url, github_project_number, created_at, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, now(), now())
-    ON CONFLICT (owner, name) DO UPDATE SET
-      github_project_id = EXCLUDED.github_project_id,
-      github_project_url = EXCLUDED.github_project_url,
-      github_project_number = EXCLUDED.github_project_number,
+      service_name, repo_url, platform, default_branch, cicd_type, trigger_method, board_id, metadata, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+    ON CONFLICT (service_name) DO UPDATE SET
+      board_id = EXCLUDED.board_id,
+      metadata = EXCLUDED.metadata,
       updated_at = now()
-  `, [repoOwner, repoName, project.id, project.url, project.number]);
+  `, [ownerRepo, `https://github.com/${ownerRepo}`, "github", "main", "github-actions", "webhook", project.id, JSON.stringify(metadata)]);
   console.log(`  Registered.`);
 
   await pool.end();

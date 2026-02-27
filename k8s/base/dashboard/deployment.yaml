@@ -27,6 +27,8 @@ spec:
           env:
             - name: VITE_MQTT_URL
               value: "wss://rabbitmq-ws.bto.bar/ws"
+            - name: VITE_ONBOARDING_URL
+              value: "https://mesh-six.bto.bar"
           readinessProbe:
             httpGet:
               path: /healthz
