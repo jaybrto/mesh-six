@@ -31,7 +31,7 @@ const scorer = new AgentScorer(pool);
 const eventLog = new EventLog(pool);
 
 // --- In-flight task tracking ---
-const activeTasks = new Map<string, TaskStatus & { timeoutId: Timer }>();
+const activeTasks = new Map<string, TaskStatus & { timeoutId: Timer; payload: Record<string, unknown> }>();
 
 // --- HTTP Server ---
 const app = new Hono();
@@ -123,7 +123,7 @@ app.post("/tasks", async (c) => {
   // Track task with timeout
   const timeoutId = setTimeout(() => handleTimeout(task.id), timeout * 1000);
 
-  const status: TaskStatus & { timeoutId: Timer } = {
+  const status: TaskStatus & { timeoutId: Timer; payload: Record<string, unknown> } = {
     taskId: task.id,
     capability,
     dispatchedTo: bestAgent.agentId,
@@ -131,6 +131,7 @@ app.post("/tasks", async (c) => {
     status: "dispatched",
     attempts: 1,
     timeoutId,
+    payload,
   };
 
   activeTasks.set(task.id, status);
@@ -258,7 +259,7 @@ async function handleTimeout(taskId: string): Promise<void> {
 }
 
 // --- Retry with Re-scoring ---
-async function retryTask(taskStatus: TaskStatus & { timeoutId: Timer }): Promise<void> {
+async function retryTask(taskStatus: TaskStatus & { timeoutId: Timer; payload: Record<string, unknown> }): Promise<void> {
   const agents = await registry.findByCapability(taskStatus.capability);
 
   // Exclude the failed agent from this retry
@@ -305,8 +306,7 @@ async function retryTask(taskStatus: TaskStatus & { timeoutId: Timer }): Promise
   await daprClient.pubsub.publish(DAPR_PUBSUB_NAME, `tasks.${bestAgent.agentId}`, {
     id: taskStatus.taskId,
     capability: taskStatus.capability,
-    // Note: We'd need to store the original payload for full retry support
-    payload: {},
+    payload: taskStatus.payload,
     priority: 5,
     timeout: 120,
     requestedBy: APP_ID,
