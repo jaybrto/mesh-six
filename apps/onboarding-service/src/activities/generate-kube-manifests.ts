@@ -1,5 +1,6 @@
-import { join } from "path";
+import { Octokit } from "@octokit/rest";
 import type { ResourceLimits } from "../schemas.js";
+import { GITHUB_TOKEN, MESH_SIX_REPO_OWNER, MESH_SIX_REPO_NAME } from "../config.js";
 
 export interface GenerateKubeManifestsInput {
   repoOwner: string;
@@ -52,6 +53,8 @@ spec:
         dapr.io/enable-metrics: "true"
         dapr.io/metrics-port: "9090"
     spec:
+      imagePullSecrets:
+        - name: gitea-registry-secret
       initContainers:
         - name: fix-permissions
           image: busybox:1.36
@@ -107,18 +110,6 @@ spec:
                 secretKeyRef:
                   name: mesh-six-secrets
                   key: PG_PASSWORD
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 3000
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 3000
-            initialDelaySeconds: 15
-            periodSeconds: 20
           resources:
             requests:
               memory: "${limits.memoryRequest}"
@@ -187,28 +178,63 @@ export async function generateKubeManifests(
   const { repoOwner, repoName, resourceLimits } = input;
   const limits = { ...DEFAULT_RESOURCE_LIMITS, ...resourceLimits };
 
-  const repoRoot = join(
-    import.meta.dirname,
-    "..",
-    "..",
-    "..",
-    "..",
-    ".."
-  );
-  const dir = join(repoRoot, "k8s", "base", "envs", `${repoOwner}-${repoName}`);
+  const octokit = new Octokit({ auth: GITHUB_TOKEN });
+  const dir = `k8s/base/envs/${repoOwner}-${repoName}`;
 
-  await Bun.write(
-    join(dir, "statefulset.yaml"),
-    buildStatefulSetYaml(repoOwner, repoName, limits)
-  );
-  await Bun.write(
-    join(dir, "service.yaml"),
-    buildServiceYaml(repoOwner, repoName)
-  );
-  await Bun.write(
-    join(dir, "kustomization.yaml"),
-    buildKustomizationYaml()
-  );
+  const files = [
+    {
+      path: `${dir}/statefulset.yaml`,
+      content: buildStatefulSetYaml(repoOwner, repoName, limits),
+      message: `chore: add statefulset manifest for env-${repoOwner}-${repoName}`,
+    },
+    {
+      path: `${dir}/service.yaml`,
+      content: buildServiceYaml(repoOwner, repoName),
+      message: `chore: add service manifest for env-${repoOwner}-${repoName}`,
+    },
+    {
+      path: `${dir}/kustomization.yaml`,
+      content: buildKustomizationYaml(),
+      message: `chore: add kustomization for env-${repoOwner}-${repoName}`,
+    },
+  ];
+
+  for (const file of files) {
+    const encodedContent = Buffer.from(file.content).toString("base64");
+
+    // Check if file already exists to get its sha (required for updates)
+    let existingSha: string | undefined;
+    try {
+      const existing = await octokit.repos.getContent({
+        owner: MESH_SIX_REPO_OWNER,
+        repo: MESH_SIX_REPO_NAME,
+        path: file.path,
+      });
+      const data = existing.data;
+      if (!Array.isArray(data) && "sha" in data) {
+        existingSha = data.sha;
+      }
+    } catch (err: unknown) {
+      if (
+        typeof err !== "object" ||
+        err === null ||
+        !("status" in err) ||
+        (err as { status: number }).status !== 404
+      ) {
+        throw err;
+      }
+      // File does not exist — create it (no sha needed)
+    }
+
+    await octokit.repos.createOrUpdateFileContents({
+      owner: MESH_SIX_REPO_OWNER,
+      repo: MESH_SIX_REPO_NAME,
+      path: file.path,
+      message: file.message,
+      content: encodedContent,
+      ...(existingSha ? { sha: existingSha } : {}),
+    });
+  }
 
   return { dir };
 }

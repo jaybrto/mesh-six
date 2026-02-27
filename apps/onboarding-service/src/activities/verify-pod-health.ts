@@ -1,20 +1,21 @@
 export interface VerifyPodHealthInput {
   repoOwner: string;
   repoName: string;
-  timeoutMs?: number;
+  timeoutSeconds?: number;
 }
 
 export interface VerifyPodHealthResult {
+  healthy: boolean;
   podName: string;
-  readyAfterMs: number;
+  elapsedMs: number;
+  error?: string;
 }
 
 const POLL_INTERVAL_MS = 10_000;
-const DEFAULT_TIMEOUT_MS = 300_000;
+const DEFAULT_TIMEOUT_SECONDS = 300;
 
-interface KubectlPodStatus {
+interface PodStatus {
   status?: {
-    phase?: string;
     conditions?: Array<{
       type: string;
       status: string;
@@ -22,63 +23,51 @@ interface KubectlPodStatus {
   };
 }
 
-function isPodReady(podJson: KubectlPodStatus): boolean {
-  if (podJson.status?.phase !== "Running") {
-    return false;
-  }
-  const conditions = podJson.status?.conditions ?? [];
-  return conditions.some(
-    (c) => c.type === "Ready" && c.status === "True"
-  );
-}
-
 export async function verifyPodHealth(
   input: VerifyPodHealthInput
 ): Promise<VerifyPodHealthResult> {
-  const { repoOwner, repoName, timeoutMs = DEFAULT_TIMEOUT_MS } = input;
+  const { repoOwner, repoName, timeoutSeconds = DEFAULT_TIMEOUT_SECONDS } = input;
   const podName = `env-${repoOwner}-${repoName}-0`;
   const namespace = "mesh-six";
 
-  const startMs = Date.now();
+  // In-cluster Kubernetes API access
+  const token = await Bun.file("/var/run/secrets/kubernetes.io/serviceaccount/token").text();
+  const caPath = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
+  const apiBase = "https://kubernetes.default.svc";
 
-  while (true) {
-    const elapsed = Date.now() - startMs;
-    if (elapsed >= timeoutMs) {
-      throw new Error(
-        `Pod ${podName} did not become ready within ${timeoutMs}ms`
-      );
-    }
+  const startTime = Date.now();
 
-    const result = Bun.spawnSync([
-      "kubectl",
-      "get",
-      "pod",
-      podName,
-      "-n",
-      namespace,
-      "-o",
-      "json",
-    ]);
-
-    if (result.exitCode === 0) {
-      const raw = new TextDecoder().decode(result.stdout);
-      try {
-        const podJson = JSON.parse(raw) as KubectlPodStatus;
-        if (isPodReady(podJson)) {
-          return { podName, readyAfterMs: Date.now() - startMs };
+  while (Date.now() - startTime < timeoutSeconds * 1000) {
+    try {
+      const response = await fetch(
+        `${apiBase}/api/v1/namespaces/${namespace}/pods/${podName}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          // @ts-ignore — Bun-specific TLS option for custom CA
+          tls: { ca: Bun.file(caPath) },
         }
-      } catch {
-        // JSON parse failed — pod may still be starting
+      );
+
+      if (response.ok) {
+        const pod = (await response.json()) as PodStatus;
+        const ready = pod.status?.conditions?.find(
+          (c) => c.type === "Ready" && c.status === "True"
+        );
+        if (ready) {
+          return { healthy: true, podName, elapsedMs: Date.now() - startTime };
+        }
       }
+    } catch {
+      // Pod may not exist yet — continue polling
     }
 
-    // Wait before next poll (but respect remaining timeout)
-    const remaining = timeoutMs - (Date.now() - startMs);
-    if (remaining <= 0) {
-      throw new Error(
-        `Pod ${podName} did not become ready within ${timeoutMs}ms`
-      );
-    }
-    await Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining));
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
+
+  return {
+    healthy: false,
+    podName,
+    elapsedMs: Date.now() - startTime,
+    error: `Pod ${podName} not ready after ${timeoutSeconds}s`,
+  };
 }

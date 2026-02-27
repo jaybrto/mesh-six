@@ -10,6 +10,8 @@ export const DATABASE_URL =
   `postgresql://${process.env.PG_USER || "mesh_six"}:${process.env.PG_PASSWORD || ""}@${process.env.PG_HOST || "pgsql.k3s.bto.bar"}:${process.env.PG_PORT || "5432"}/${process.env.PG_DATABASE || "mesh_six"}`;
 
 export const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
+export const MESH_SIX_REPO_OWNER = process.env.MESH_SIX_REPO_OWNER || "jaybrto";
+export const MESH_SIX_REPO_NAME = process.env.MESH_SIX_REPO_NAME || "mesh-six";
 export const LITELLM_URL = process.env.LITELLM_URL || "http://litellm.k3s.bto.bar";
 export const LITELLM_ADMIN_KEY = process.env.LITELLM_ADMIN_KEY || "";
 export const VAULT_ADDR = process.env.VAULT_ADDR || "http://vault.vault.svc.cluster.local:8200";

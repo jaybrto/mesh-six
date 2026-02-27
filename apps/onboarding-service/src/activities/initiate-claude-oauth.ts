@@ -4,34 +4,44 @@ export interface ClaudeOAuthResult {
 }
 
 export async function initiateClaudeOAuth(): Promise<ClaudeOAuthResult> {
-  const proc = Bun.spawn(["claude", "auth", "login", "--print-device-code"], {
+  // Use claude CLI's oauth login in a way that captures the device code output.
+  // claude auth login outputs the verification URL and code to stderr interactively.
+  // We capture both stdout and stderr to find the URL and code.
+  const proc = Bun.spawn(["claude", "auth", "login"], {
     stdout: "pipe",
     stderr: "pipe",
+    env: {
+      ...process.env,
+      // Force non-interactive mode if available
+      CI: "1",
+    },
   });
 
-  const [stdout, exitCode] = await Promise.all([
+  // Give it a few seconds to output the device code, then kill it
+  // (we don't want it to wait for the user to complete the flow)
+  const timeout = setTimeout(() => proc.kill(), 10_000);
+
+  const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
-    proc.exited,
+    new Response(proc.stderr).text(),
   ]);
+  clearTimeout(timeout);
 
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(
-      `claude auth login failed with exit code ${exitCode}: ${stderr}`
-    );
-  }
+  const combined = `${stdout}\n${stderr}`;
 
-  const urlMatch = stdout.match(/https:\/\/\S+/);
+  // Look for the verification URL pattern
+  const urlMatch = combined.match(/https:\/\/\S+/);
   if (!urlMatch) {
     throw new Error(
-      `Failed to parse device URL from claude auth output: ${stdout}`
+      `Failed to parse device URL from claude auth output. stdout: ${stdout}, stderr: ${stderr}`
     );
   }
 
-  const codeMatch = stdout.match(/code:\s*(\S+)/i);
+  // Look for the user code pattern (typically "code: XXXX-XXXX" or similar)
+  const codeMatch = combined.match(/code[:\s]+([A-Z0-9-]+)/i);
   if (!codeMatch) {
     throw new Error(
-      `Failed to parse user code from claude auth output: ${stdout}`
+      `Failed to parse user code from claude auth output. stdout: ${stdout}, stderr: ${stderr}`
     );
   }
 
