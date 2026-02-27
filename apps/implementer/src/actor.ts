@@ -21,7 +21,6 @@ import {
 import {
   DAPR_HOST,
   DAPR_HTTP_PORT,
-  AUTH_PROJECT_ID,
   WORKTREE_BASE_DIR,
   CLAUDE_SESSION_DIR,
   AGENT_ID,
@@ -67,6 +66,7 @@ export interface ActorState {
   workflowId?: string;
   answerInjected?: boolean;
   claudeSessionId?: string;
+  authProjectId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +103,7 @@ export class ImplementerActor {
     repoName: string;
     branch: string;
     workflowId?: string;
+    authProjectId?: string;
   }): Promise<{ ok: boolean; error?: string }> {
     log(`Activating actor ${this.actorId} for issue #${params.issueNumber}`);
 
@@ -110,7 +111,7 @@ export class ImplementerActor {
     const worktreeDir = join(WORKTREE_BASE_DIR, `${params.repoOwner}-${params.repoName}`, `issue-${params.issueNumber}`);
 
     // Provision credentials from auth-service via Dapr service invocation
-    const authProjectId = AUTH_PROJECT_ID;
+    const authProjectId = params.authProjectId ?? "mesh-six";
     let bundleId: string | undefined;
     try {
       bundleId = await this.provisionCredentials(authProjectId);
@@ -137,6 +138,7 @@ export class ImplementerActor {
       credentialBundleId: bundleId,
       status: "idle",
       workflowId: params.workflowId,
+      authProjectId,
     };
 
     await insertActivityLog({

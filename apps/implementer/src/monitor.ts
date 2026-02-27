@@ -14,7 +14,7 @@ import {
   detectAuthFailure,
   type TaskResult,
 } from "@mesh-six/core";
-import { DAPR_HOST, DAPR_HTTP_PORT, AUTH_PROJECT_ID, AGENT_ID } from "./config.js";
+import { DAPR_HOST, DAPR_HTTP_PORT, AGENT_ID } from "./config.js";
 import { capturePane } from "./tmux.js";
 import {
   updateSessionStatus,
@@ -306,7 +306,8 @@ export class SessionMonitor {
 
   private async reprovisionsCredentials(): Promise<boolean> {
     try {
-      const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/${AUTH_SERVICE_APP_ID}/method/projects/${AUTH_PROJECT_ID}/provision`;
+      const authProjectId = this.ctx.actorState.authProjectId;
+      const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/${AUTH_SERVICE_APP_ID}/method/projects/${authProjectId}/provision`;
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

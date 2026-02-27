@@ -248,9 +248,10 @@ async function handleTask(task: TaskRequest): Promise<void> {
     repoName?: string;
     branch?: string;
     implementationPrompt?: string;
+    authProjectId?: string;
   };
 
-  const { issueNumber, repoOwner, repoName, branch, implementationPrompt } = payload;
+  const { issueNumber, repoOwner, repoName, branch, implementationPrompt, authProjectId } = payload;
 
   if (!issueNumber || !repoOwner || !repoName || !branch || !implementationPrompt) {
     const failResult: TaskResult = {
@@ -286,6 +287,7 @@ async function handleTask(task: TaskRequest): Promise<void> {
     repoOwner,
     repoName,
     branch,
+    authProjectId,
   });
 
   if (!activateResult.ok) {
