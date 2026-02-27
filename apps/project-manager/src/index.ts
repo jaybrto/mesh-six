@@ -20,6 +20,7 @@ import {
   tracedChatCompletion,
   chatCompletionWithSchema,
   ARCHITECT_ACTOR_TYPE,
+  createMinioClient,
   type AgentRegistration,
   type TaskRequest,
   type TaskResult,
@@ -55,6 +56,8 @@ import {
   syncPlanToIssue,
   updateProjectCustomFields,
 } from "./comment-activities.js";
+import { registerResearchWorkflow } from "./research-sub-workflow.js";
+import { createResearchActivities } from "./research-activities.js";
 
 // --- Configuration ---
 const AGENT_ID = process.env.AGENT_ID || "project-manager";
@@ -1955,6 +1958,26 @@ Categories:
 
     // Create and start workflow runtime
     workflowRuntime = createWorkflowRuntime(activityImplementations);
+
+    // Register ResearchAndPlan sub-workflow + activities
+    if (pgPool) {
+      const minioClient = createMinioClient({
+        endpoint: process.env.MINIO_ENDPOINT || "http://minio.minio:9000",
+        accessKeyId: process.env.MINIO_ACCESS_KEY || "",
+        secretAccessKey: process.env.MINIO_SECRET_KEY || "",
+        bucket: process.env.RESEARCH_BUCKET || "mesh-six-research",
+      });
+      const researchActivities = createResearchActivities({
+        daprClient,
+        minioClient,
+        pgPool,
+      });
+      registerResearchWorkflow(workflowRuntime, researchActivities);
+      console.log(`[${AGENT_ID}] Research sub-workflow registered`);
+    } else {
+      console.warn(`[${AGENT_ID}] Skipping research sub-workflow (no DATABASE_URL)`);
+    }
+
     // Wrap start() to catch both sync and async gRPC stream errors
     // (durabletask-js can fail asynchronously on gRPC stream after start() resolves)
     await workflowRuntime.start().catch((err: Error) => {

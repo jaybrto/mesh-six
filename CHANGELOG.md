@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-27: Research & Plan Sub-Workflow
+
+Implements the ResearchAndPlanSubWorkflow for complex architectural planning using a triage-escalate-review loop pattern. The Architect triages tasks to determine if deep research is needed, dispatches to an external scraper service via Dapr, hibernates (0 CPU) awaiting results, and drafts a final plan from synthesized research.
+
+**@mesh-six/core@0.11.0**
+- `src/research-types.ts`: New Zod schemas and TypeScript types for the research sub-workflow — `TriageOutput`, `ResearchAndPlanInput/Output`, `ReviewResearchOutput`, `StartDeepResearchInput/Output`, `DraftPlanInput`, `ArchitectTriageInput`, `SendPushNotificationInput`, `ResearchSession`, research status enums, and constants (`RESEARCH_BUCKET`, `RESEARCH_TIMEOUT_MS`, `MAX_RESEARCH_CYCLES`)
+- `src/research-minio.ts`: MinIO helpers implementing the Claim Check pattern — `writeResearchStatus`, `readResearchStatus`, `uploadRawResearch`, `downloadRawResearch`, `uploadCleanResearch`, `downloadCleanResearch`, `getResearchBucket`
+- `src/prompts/architect-reflection.ts`: Architect-specific prompts — `ARCHITECT_REFLECTION_PROMPT` (scoped memory extraction), `ARCHITECT_TRIAGE_PROMPT` (research need assessment), `RESEARCH_REVIEW_PROMPT` (scrape validation), `ARCHITECT_DRAFT_PLAN_PROMPT` (plan generation)
+- `src/tools/web-research.ts`: Web research tool schemas for LLM calls — `webResearchTools` (googleSearch, web_fetch), `buildResearchSystemPrompt`
+- `src/research-types.test.ts`: 24 unit tests for all research type schemas and constants
+- `src/index.ts`: Exports all new research modules
+
+**@mesh-six/project-manager@0.8.0**
+- `src/research-sub-workflow.ts`: Dapr Durable Workflow implementing the triage → research → review → plan pipeline with timer-based timeouts, external event coordination, and iterative review loops (max 3 cycles)
+- `src/research-activities.ts`: Activity implementations — `architectTriage` (Gemini Pro LLM triage), `startDeepResearch` (claim check + scraper dispatch), `reviewResearch` (Gemini Flash validation + clean doc upload), `architectDraftPlan` (final plan synthesis), `sendPushNotification` (ntfy alerts)
+- `src/index.ts`: Wired research sub-workflow registration into startup with MinIO client initialization
+
+**Database**
+- `migrations/014_research_sessions.sql`: New `research_sessions` table for tracking triage-research-plan state with indexes on task_id (unique), workflow_id, issue, and status
+
+**Scripts**
+- `scripts/test-research-workflow.ts`: Multi-mode test script (triage, dispatch, review, full, workflow, db) for troubleshooting the research pipeline end-to-end
+
 ### Added - 2026-02-27: Remaining Production Readiness Fixes
 
 Resolved 6 remaining items from production readiness audit: orchestrator state persistence, dashboard onboarding view, configurable ntfy notifications, OAuth hardening, webhook K8s env vars, and E2E CI wiring.

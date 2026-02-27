@@ -254,3 +254,67 @@ export {
   getPresignedUrl as getMinioPresignedUrl,
   type MinioConfig,
 } from "./minio.js";
+
+// Research sub-workflow types
+export {
+  ResearchStatusSchema,
+  ResearchStatusDocSchema,
+  TriageOutputSchema,
+  ResearchAndPlanInputSchema,
+  ResearchAndPlanOutputSchema,
+  ReviewResearchOutputSchema,
+  StartDeepResearchInputSchema,
+  StartDeepResearchOutputSchema,
+  ReviewResearchInputSchema,
+  DraftPlanInputSchema,
+  ArchitectTriageInputSchema,
+  SendPushNotificationInputSchema,
+  ResearchSessionSchema,
+  RESEARCH_BUCKET,
+  RESEARCH_STATUS_PREFIX,
+  RESEARCH_RAW_PREFIX,
+  RESEARCH_CLEAN_PREFIX,
+  SCRAPER_SERVICE_APP_ID,
+  SCRAPE_COMPLETED_EVENT,
+  RESEARCH_TIMEOUT_MS,
+  MAX_RESEARCH_CYCLES,
+  type ResearchStatus,
+  type ResearchStatusDoc,
+  type TriageOutput,
+  type ResearchAndPlanInput,
+  type ResearchAndPlanOutput,
+  type ReviewResearchOutput,
+  type StartDeepResearchInput,
+  type StartDeepResearchOutput,
+  type ReviewResearchInput,
+  type DraftPlanInput,
+  type ArchitectTriageInput,
+  type SendPushNotificationInput,
+  type ResearchSession,
+} from "./research-types.js";
+
+// Research MinIO helpers (Claim Check pattern)
+export {
+  writeResearchStatus,
+  readResearchStatus,
+  uploadRawResearch,
+  downloadRawResearch,
+  uploadCleanResearch,
+  downloadCleanResearch,
+  getResearchBucket,
+} from "./research-minio.js";
+
+// Architect prompts
+export {
+  ARCHITECT_REFLECTION_PROMPT,
+  ARCHITECT_TRIAGE_PROMPT,
+  RESEARCH_REVIEW_PROMPT,
+  ARCHITECT_DRAFT_PLAN_PROMPT,
+} from "./prompts/architect-reflection.js";
+
+// Web research tools
+export {
+  webResearchTools,
+  buildResearchSystemPrompt,
+  type WebResearchTool,
+} from "./tools/web-research.js";
