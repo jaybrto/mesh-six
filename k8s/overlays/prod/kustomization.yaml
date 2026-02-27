@@ -41,5 +41,13 @@ images:
     newTag: latest
   - name: registry.bto.bar/jaybrto/mesh-six-webhook-receiver
     newTag: latest
+  - name: registry.bto.bar/jaybrto/mesh-six-auth-service
+    newTag: latest
+  - name: registry.bto.bar/jaybrto/mesh-six-implementer
+    newTag: latest
   - name: registry.bto.bar/jaybrto/mesh-six-llm-service
+    newTag: latest
+  - name: registry.bto.bar/jaybrto/mesh-six-onboarding-service
+    newTag: latest
+  - name: registry.bto.bar/jaybrto/mesh-six-context-service
     newTag: latest

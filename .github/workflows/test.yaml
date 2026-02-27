@@ -49,13 +49,18 @@ jobs:
             api-coder
             architect-agent
             argocd-deployer
+            auth-service
             claude-mqtt-bridge
+            context-service
             cost-tracker
             dashboard
             event-logger
             homelab-monitor
+            implementer
             infra-manager
             kubectl-deployer
+            llm-service
+            onboarding-service
             orchestrator
             project-manager
             qa-tester

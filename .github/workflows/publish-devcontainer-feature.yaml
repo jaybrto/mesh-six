@@ -1,0 +1,30 @@
+name: Publish DevContainer Feature
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'devcontainer-features/mesh-six-tools/**'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Publish feature to Gitea registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          echo "${REGISTRY_TOKEN}" | oras login registry.bto.bar -u jaybrto --password-stdin
+          devcontainer features publish \
+            devcontainer-features/mesh-six-tools \
+            --registry registry.bto.bar \
+            --namespace jaybrto/devcontainer-features
