@@ -191,13 +191,11 @@ interface CodePodProgress {
 
 // --- Project State Machine ---
 export const ProjectState = z.enum([
-  "CREATE",
+  "INTAKE",
   "PLANNING",
-  "REVIEW",
-  "IN_PROGRESS",
+  "IMPLEMENTATION",
   "QA",
-  "DEPLOY",
-  "VALIDATE",
+  "REVIEW",
   "ACCEPTED",
   "FAILED",
 ]);
@@ -339,7 +337,7 @@ const REGISTRATION: AgentRegistration = {
   metadata: {
     specialization: "project-lifecycle-management",
     platforms: ["github", "gitea"],
-    stateCount: 8,
+    stateCount: 7,
   },
 };
 
@@ -348,21 +346,19 @@ const SYSTEM_PROMPT = `You are the Project Manager Agent for the mesh-six agent 
 
 ## Your Role
 - Create and manage project board items on GitHub/Gitea
-- Drive projects through the state machine: CREATE → PLANNING → REVIEW → IN_PROGRESS → QA → DEPLOY → VALIDATE → ACCEPTED
+- Drive projects through the state machine: INTAKE → PLANNING → IMPLEMENTATION → QA → REVIEW → ACCEPTED
 - Consult the Architect agent for technical guidance
 - Request research from the Researcher agent when needed
 - Evaluate work quality at review gates
 - Coordinate with Claude Code pods for implementation
 
 ## State Machine
-1. **CREATE**: Initial project creation, board item created
-2. **PLANNING**: Implementation plan being developed
-3. **REVIEW**: Plan review - approve or send back to PLANNING
-4. **IN_PROGRESS**: Active development by Claude Code pod
-5. **QA**: Testing and quality checks
-6. **DEPLOY**: Deployment in progress
-7. **VALIDATE**: Post-deployment validation
-8. **ACCEPTED**: Project completed successfully
+1. **INTAKE**: Initial project intake, architect consulted, board item created
+2. **PLANNING**: Implementation plan being developed by Claude CLI
+3. **IMPLEMENTATION**: Active development by Claude Code pod
+4. **QA**: Testing and quality checks
+5. **REVIEW**: Deployment validation and PR review
+6. **ACCEPTED**: Project completed successfully
 
 ## Review Gates
 At each review transition, evaluate:
@@ -771,13 +767,11 @@ function formatSmokeTestReport(results: SmokeTestResult[]): string {
 // --- State Transition Logic ---
 function canTransition(from: ProjectState, to: ProjectState): boolean {
   const validTransitions: Record<ProjectState, ProjectState[]> = {
-    CREATE: ["PLANNING"],
-    PLANNING: ["REVIEW"],
-    REVIEW: ["PLANNING", "IN_PROGRESS"], // Can go back to PLANNING or forward
-    IN_PROGRESS: ["QA"],
-    QA: ["PLANNING", "DEPLOY"], // Can go back if tests fail
-    DEPLOY: ["VALIDATE"],
-    VALIDATE: ["PLANNING", "ACCEPTED"], // Can go back if validation fails
+    INTAKE: ["PLANNING"],
+    PLANNING: ["IMPLEMENTATION"],
+    IMPLEMENTATION: ["QA"],
+    QA: ["PLANNING", "REVIEW"], // Can go back if tests fail
+    REVIEW: ["PLANNING", "ACCEPTED"], // Can go back if validation fails
     ACCEPTED: [], // Terminal state
     FAILED: [], // Terminal state
   };
@@ -805,7 +799,7 @@ async function transitionState(
 
   // Add comment to issue
   if (project.issueNumber) {
-    const comment = `🔄 **State Transition**: ${project.stateHistory[project.stateHistory.length - 2]?.state || "CREATE"} → ${newState}\n\n${reason || ""}`;
+    const comment = `🔄 **State Transition**: ${project.stateHistory[project.stateHistory.length - 2]?.state || "INTAKE"} → ${newState}\n\n${reason || ""}`;
 
     if (project.platform === "github") {
       await addGitHubComment(project.repoOwner, project.repoName, project.issueNumber, comment);
@@ -905,9 +899,9 @@ async function evaluateReviewGate(
 
   // Build context with memory-enriched prompt
   const stateMap: Record<string, { from: ProjectState; to: ProjectState }> = {
-    plan: { from: "PLANNING", to: "REVIEW" },
-    qa: { from: "QA", to: "DEPLOY" },
-    deployment: { from: "DEPLOY", to: "VALIDATE" },
+    plan: { from: "PLANNING", to: "IMPLEMENTATION" },
+    qa: { from: "QA", to: "REVIEW" },
+    deployment: { from: "REVIEW", to: "ACCEPTED" },
   };
 
   const taskRequest: TaskRequest = {
@@ -1173,13 +1167,11 @@ app.post("/projects/:id/advance", async (c) => {
 // Get valid transitions for a state
 function getValidTransitions(state: ProjectState): ProjectState[] {
   const transitions: Record<ProjectState, ProjectState[]> = {
-    CREATE: ["PLANNING"],
-    PLANNING: ["REVIEW"],
-    REVIEW: ["PLANNING", "IN_PROGRESS"],
-    IN_PROGRESS: ["QA"],
-    QA: ["PLANNING", "DEPLOY"],
-    DEPLOY: ["VALIDATE"],
-    VALIDATE: ["PLANNING", "ACCEPTED"],
+    INTAKE: ["PLANNING"],
+    PLANNING: ["IMPLEMENTATION"],
+    IMPLEMENTATION: ["QA"],
+    QA: ["PLANNING", "REVIEW"],
+    REVIEW: ["PLANNING", "ACCEPTED"],
     ACCEPTED: [],
     FAILED: [],
   };
@@ -1250,7 +1242,7 @@ app.post("/tasks", async (c) => {
           id: crypto.randomUUID(),
           title: projectTask.title || "Untitled Project",
           description: projectTask.description || "",
-          state: "CREATE",
+          state: "INTAKE",
           platform: projectTask.platform || "github",
           repoOwner: projectTask.repoOwner || "",
           repoName: projectTask.repoName || "",
