@@ -1,0 +1,10 @@
+{
+  "name": "mesh-six agent environment",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "registry.bto.bar/jaybrto/devcontainer-features/mesh-six-tools:1": {}
+  },
+  "remoteUser": "runner",
+  "containerUser": "runner"
+}
