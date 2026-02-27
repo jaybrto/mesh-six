@@ -19,12 +19,17 @@ jobs:
       - name: Install devcontainer CLI
         run: npm install -g @devcontainers/cli
 
-      - name: Publish feature to Gitea registry
+      - name: Login to Gitea registry
         env:
           REGISTRY_TOKEN: ${{ secrets.GITEA_TOKEN }}
           REGISTRY_USER: ${{ secrets.GITEA_USERNAME }}
         run: |
-          echo "${REGISTRY_TOKEN}" | oras login registry.bto.bar -u "${REGISTRY_USER}" --password-stdin
+          mkdir -p ~/.docker
+          AUTH=$(echo -n "${REGISTRY_USER}:${REGISTRY_TOKEN}" | base64)
+          echo "{\"auths\":{\"registry.bto.bar\":{\"auth\":\"${AUTH}\"}}}" > ~/.docker/config.json
+
+      - name: Publish feature to Gitea registry
+        run: |
           devcontainer features publish \
             devcontainer-features/mesh-six-tools \
             --registry registry.bto.bar \
