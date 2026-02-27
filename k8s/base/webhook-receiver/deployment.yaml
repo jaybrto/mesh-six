@@ -48,6 +48,20 @@ spec:
               value: ""
             - name: GITHUB_STATUS_FIELD_ID
               value: ""
+            # Database
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: url
+            # Vault
+            - name: VAULT_ADDR
+              value: "http://vault.vault.svc.cluster.local:8200"
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mesh-six-secrets
+                  key: VAULT_TOKEN
           readinessProbe:
             httpGet:
               path: /healthz

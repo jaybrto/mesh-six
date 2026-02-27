@@ -29,6 +29,7 @@ const TOPICS = [
   "agent/project/#",
   "terminal/stream/#",
   "terminal/snapshot/#",
+  "onboarding/#",
 ] as const;
 
 export function MqttProvider({ children }: { children: ReactNode }) {

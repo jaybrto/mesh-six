@@ -4,12 +4,14 @@ import { AgentRegistryView } from "./views/AgentRegistry";
 import { TaskFeedView } from "./views/TaskFeed";
 import { ProjectLifecycleView } from "./views/ProjectLifecycle";
 import { SessionTerminalView } from "./views/SessionTerminalView";
+import { OnboardingView } from "./views/OnboardingView";
 
 const navItems = [
   { to: "/", label: "Agents" },
   { to: "/tasks", label: "Tasks" },
   { to: "/projects", label: "Projects" },
   { to: "/sessions", label: "Sessions" },
+  { to: "/onboarding", label: "Onboarding" },
 ] as const;
 
 export function App() {
@@ -48,6 +50,7 @@ export function App() {
             <Route path="/tasks" element={<TaskFeedView />} />
             <Route path="/projects" element={<ProjectLifecycleView />} />
             <Route path="/sessions/:sessionId/terminal" element={<SessionTerminalView />} />
+            <Route path="/onboarding" element={<OnboardingView />} />
           </Routes>
         </main>
       </div>

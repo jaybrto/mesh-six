@@ -68,6 +68,13 @@ export async function getRun(pool: pg.Pool, id: string): Promise<OnboardingRun |
   return rows[0] ? rowToRun(rows[0]) : null;
 }
 
+export async function listOnboardingRuns(pool: pg.Pool): Promise<OnboardingRun[]> {
+  const { rows } = await pool.query<OnboardingRunRow>(
+    "SELECT * FROM onboarding_runs ORDER BY created_at DESC"
+  );
+  return rows.map(rowToRun);
+}
+
 export async function updateRunStatus(
   pool: pg.Pool,
   id: string,

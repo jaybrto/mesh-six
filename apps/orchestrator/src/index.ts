@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
-import { Pool } from "pg";
 import { z } from "zod";
 import {
   AgentRegistry,
@@ -15,17 +14,23 @@ import {
   type DaprPubSubMessage,
   type DaprSubscription,
 } from "@mesh-six/core";
+import {
+  pool,
+  saveTask,
+  loadActiveTasks,
+  updateTaskStatus,
+  deleteTask,
+  checkpointAll,
+} from "./db";
 
 // --- Configuration ---
 const APP_ID = "orchestrator";
 const APP_PORT = Number(process.env.APP_PORT) || 3000;
 const DAPR_HOST = process.env.DAPR_HOST || "localhost";
 const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
-const DATABASE_URL = process.env.DATABASE_URL || process.env.PG_PRIMARY_URL || "postgres://localhost:5432/mesh_six";
 
 // --- Clients ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
-const pool = new Pool({ connectionString: DATABASE_URL });
 const registry = new AgentRegistry(daprClient);
 const scorer = new AgentScorer(pool);
 const eventLog = new EventLog(pool);
@@ -136,6 +141,18 @@ app.post("/tasks", async (c) => {
 
   activeTasks.set(task.id, status);
 
+  // Persist to database (fire-and-forget)
+  saveTask({
+    taskId: task.id,
+    capability,
+    dispatchedTo: bestAgent.agentId,
+    dispatchedAt: new Date(),
+    status: "dispatched",
+    attempts: 1,
+    timeoutSeconds: timeout,
+    payload,
+  }).catch((e) => console.warn("[Orchestrator] Failed to persist task:", e));
+
   return c.json({
     taskId: task.id,
     dispatchedTo: bestAgent.agentId,
@@ -181,9 +198,15 @@ app.post("/results", async (c) => {
 
   // Handle failure - retry with re-scoring
   if (!validResult.success && taskStatus.attempts < 3) {
+    updateTaskStatus(validResult.taskId, "retrying", { error: validResult.error }).catch((e) =>
+      console.warn("[Orchestrator] Failed to update task status:", e)
+    );
     await retryTask(taskStatus);
   } else {
     activeTasks.delete(validResult.taskId);
+    deleteTask(validResult.taskId).catch((e) =>
+      console.warn("[Orchestrator] Failed to delete completed task:", e)
+    );
   }
 
   return c.json({ status: "SUCCESS" });
@@ -251,10 +274,16 @@ async function handleTimeout(taskId: string): Promise<void> {
 
   // Retry with re-scoring if attempts remain
   if (taskStatus.attempts < 3) {
+    updateTaskStatus(taskId, "timeout", { error: { type: "timeout", message: "Task execution timed out" } }).catch((e) =>
+      console.warn("[Orchestrator] Failed to update task status:", e)
+    );
     await retryTask(taskStatus);
   } else {
     console.error(`[Orchestrator] Task ${taskId} failed after 3 attempts`);
     activeTasks.delete(taskId);
+    deleteTask(taskId).catch((e) =>
+      console.warn("[Orchestrator] Failed to delete terminal task:", e)
+    );
   }
 }
 
@@ -268,6 +297,9 @@ async function retryTask(taskStatus: TaskStatus & { timeoutId: Timer; payload: R
   if (availableAgents.length === 0) {
     console.error(`[Orchestrator] No alternative agents for retry: ${taskStatus.taskId}`);
     activeTasks.delete(taskStatus.taskId);
+    deleteTask(taskStatus.taskId).catch((e) =>
+      console.warn("[Orchestrator] Failed to delete task with no agents:", e)
+    );
     return;
   }
 
@@ -275,6 +307,9 @@ async function retryTask(taskStatus: TaskStatus & { timeoutId: Timer; payload: R
   if (scores.length === 0) {
     console.error(`[Orchestrator] No healthy agents for retry: ${taskStatus.taskId}`);
     activeTasks.delete(taskStatus.taskId);
+    deleteTask(taskStatus.taskId).catch((e) =>
+      console.warn("[Orchestrator] Failed to delete task with no healthy agents:", e)
+    );
     return;
   }
 
@@ -315,7 +350,60 @@ async function retryTask(taskStatus: TaskStatus & { timeoutId: Timer; payload: R
 
   // Reset timeout
   taskStatus.timeoutId = setTimeout(() => handleTimeout(taskStatus.taskId), 120 * 1000);
+
+  // Persist retry state (fire-and-forget)
+  saveTask({
+    taskId: taskStatus.taskId,
+    capability: taskStatus.capability,
+    dispatchedTo: bestAgent.agentId,
+    dispatchedAt: new Date(),
+    status: "dispatched",
+    attempts: taskStatus.attempts,
+    payload: taskStatus.payload,
+  }).catch((e) => console.warn("[Orchestrator] Failed to persist retry:", e));
 }
+
+// --- Startup Recovery ---
+try {
+  const recovered = await loadActiveTasks();
+  for (const task of recovered) {
+    const elapsedMs = Date.now() - task.dispatchedAt.getTime();
+    const remainingMs = Math.max(0, task.timeoutSeconds * 1000 - elapsedMs);
+    const timeoutId = setTimeout(() => handleTimeout(task.taskId), remainingMs);
+
+    activeTasks.set(task.taskId, {
+      taskId: task.taskId,
+      capability: task.capability,
+      dispatchedTo: task.dispatchedTo,
+      dispatchedAt: task.dispatchedAt.toISOString(),
+      status: task.status as "pending" | "dispatched" | "completed" | "failed" | "timeout",
+      attempts: task.attempts,
+      timeoutId,
+      payload: task.payload,
+    });
+  }
+  if (recovered.length > 0) {
+    console.log(`[Orchestrator] Recovered ${recovered.length} in-flight tasks from database`);
+  }
+} catch (e) {
+  console.warn("[Orchestrator] Failed to recover tasks from database:", e);
+}
+
+// --- Graceful Shutdown ---
+async function shutdown() {
+  console.log("[Orchestrator] Shutdown signal received, checkpointing tasks...");
+  try {
+    await checkpointAll(activeTasks);
+    console.log("[Orchestrator] Checkpoint complete");
+  } catch (e) {
+    console.warn("[Orchestrator] Checkpoint failed:", e);
+  }
+  await pool.end().catch(() => {});
+  process.exit(0);
+}
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
 
 // --- Start Server ---
 console.log(`[Orchestrator] Starting on port ${APP_PORT}`);

@@ -7,6 +7,7 @@ const statusStyles: Record<string, string> = {
   completed: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
   failed: "bg-red-500/20 text-red-400 border-red-500/30",
   timeout: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+  configuring: "bg-purple-500/20 text-purple-400 border-purple-500/30",
 };
 
 const defaultStyle = "bg-zinc-500/20 text-zinc-400 border-zinc-500/30";

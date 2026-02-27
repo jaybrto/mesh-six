@@ -6,7 +6,7 @@ import {
   AGENT_ID,
   DATABASE_URL,
 } from "./config.js";
-import { insertRun, getRun } from "./db.js";
+import { insertRun, getRun, listOnboardingRuns } from "./db.js";
 import { OnboardProjectRequestSchema, AuthCallbackSchema } from "./schemas.js";
 import {
   createWorkflowRuntime,
@@ -77,6 +77,17 @@ app.post("/onboard", async (c) => {
     return c.json({ runId, status: "pending" }, 202);
   } catch (err) {
     console.error(`[${AGENT_ID}] POST /onboard failed:`, err);
+    return c.json({ error: String(err) }, 500);
+  }
+});
+
+// GET /onboard — list all onboarding runs
+app.get("/onboard", async (c) => {
+  try {
+    const runs = await listOnboardingRuns(pool);
+    return c.json(runs);
+  } catch (err) {
+    console.error(`[${AGENT_ID}] GET /onboard failed:`, err);
     return c.json({ error: String(err) }, 500);
   }
 });

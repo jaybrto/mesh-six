@@ -87,6 +87,11 @@ spec:
                   key: password
             - name: PG_PRIMARY_DB
               value: "mesh_six"
+            # Notification configuration
+            - name: NTFY_TOPIC
+              value: "mesh-six-pm"
+            - name: MESH_SIX_PUBLIC_URL
+              value: "https://mesh-six.bto.bar"
           readinessProbe:
             httpGet:
               path: /healthz

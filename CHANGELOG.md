@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-27: Remaining Production Readiness Fixes
+
+Resolved 6 remaining items from production readiness audit: orchestrator state persistence, dashboard onboarding view, configurable ntfy notifications, OAuth hardening, webhook K8s env vars, and E2E CI wiring.
+
+**@mesh-six/orchestrator@0.3.0**
+- `src/db.ts`: New PostgreSQL persistence module for in-flight task state (CRUD via `orchestrator_tasks` table)
+- `src/index.ts`: Persist tasks on dispatch, recover from DB on startup with elapsed-time timeout calculation, checkpoint all tasks on SIGTERM/SIGINT, shared pool with AgentScorer/EventLog
+
+**@mesh-six/dashboard@0.3.0**
+- `src/views/OnboardingView.tsx`: New onboarding status view — REST polling + MQTT real-time updates, table with expandable detail rows, OAuth device code display, phase progress tracker
+- `src/App.tsx`: Added `/onboarding` route and nav link
+- `src/components/StatusBadge.tsx`: Added `configuring` purple variant for auth phase
+- `src/hooks/useMqtt.tsx`: Added `onboarding/#` MQTT topic subscription
+
+**@mesh-six/project-manager@0.7.1**
+- `src/index.ts`: Configurable ntfy topic via `NTFY_TOPIC` env var (default: `mesh-six-pm`)
+- `src/index.ts`: Configurable public reply URL via `MESH_SIX_PUBLIC_URL` env var with Dapr-internal fallback
+
+**@mesh-six/onboarding-service@0.2.1**
+- `src/activities/initiate-claude-oauth.ts`: Stricter URL regex (Anthropic/Claude domains only), stricter code regex (XXXX-XXXX), configurable timeout (`CLAUDE_AUTH_TIMEOUT_MS`), 3-attempt retry with exponential backoff, truncated stdout/stderr in error messages
+- `src/db.ts`: Added `listOnboardingRuns()` for dashboard consumption
+- `src/index.ts`: Added `GET /onboard` list endpoint
+
+**K8s Infrastructure**
+- `k8s/base/webhook-receiver/deployment.yaml`: Added `DATABASE_URL`, `VAULT_ADDR`, `VAULT_TOKEN` env vars for multi-project support
+- `k8s/base/project-manager/deployment.yaml`: Added `NTFY_TOPIC`, `MESH_SIX_PUBLIC_URL` env vars
+
+**CI/CD**
+- `.github/workflows/test.yaml`: Added `workflow_dispatch` trigger and `e2e-tests` job (manual-only, self-hosted runner, 180min timeout)
+
+**Database**
+- `migrations/013_orchestrator_tasks.sql`: New table for orchestrator task persistence with status and capability indexes
+
 ### Fixed - 2026-02-26: Production Readiness — 12 Blockers Resolved
 
 Systematic audit and fix of all blockers preventing first project onboarding.

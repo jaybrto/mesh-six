@@ -79,6 +79,10 @@ const GITEA_TOKEN = process.env.GITEA_TOKEN || "";
 const GITHUB_PROJECT_ID = process.env.GITHUB_PROJECT_ID || "";
 const GITHUB_STATUS_FIELD_ID = process.env.GITHUB_STATUS_FIELD_ID || "";
 
+// ntfy Configuration
+const NTFY_TOPIC = process.env.NTFY_TOPIC || "mesh-six-pm";
+const MESH_SIX_PUBLIC_URL = process.env.MESH_SIX_PUBLIC_URL || "";
+
 // MQTT Configuration
 const MQTT_URL = process.env.MQTT_URL || "mqtt://rabbitmq.rabbitmq:1883";
 const MQTT_ENABLED = process.env.MQTT_ENABLED !== "false";
@@ -1892,14 +1896,17 @@ Categories:
       },
 
       notifyHumanQuestion: async (_ctx, input) => {
-        const ntfyUrl = `https://ntfy.sh/mesh-six-pm`;
+        const ntfyUrl = `https://ntfy.sh/${NTFY_TOPIC}`;
+        const replyUrl = MESH_SIX_PUBLIC_URL
+          ? `${MESH_SIX_PUBLIC_URL}/ntfy-reply`
+          : `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/project-manager/method/ntfy-reply`;
         await fetch(ntfyUrl, {
           method: "POST",
           body: `Issue #${input.issueNumber} (${input.repoOwner}/${input.repoName})\n\nQuestion: ${input.questionText}${input.architectBestGuess ? `\n\nArchitect best guess: ${input.architectBestGuess}` : ""}`,
           headers: {
             Title: `mesh-six: Question on #${input.issueNumber}`,
             Priority: "high",
-            Actions: `http, Reply, http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/project-manager/method/ntfy-reply, method=POST, headers.X-Workflow-Id=${input.workflowId}&headers.X-Question=${encodeURIComponent(input.questionText)}`,
+            Actions: `http, Reply, ${replyUrl}, method=POST, headers.X-Workflow-Id=${input.workflowId}&headers.X-Question=${encodeURIComponent(input.questionText)}`,
           },
         }).catch((e) => console.warn(`[${AGENT_ID}] ntfy notification failed:`, e));
       },
