@@ -1,10 +1,21 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)",
-      "Read(*)",
-      "Write(*)",
-      "Edit(*)"
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "WebFetch",
+      "WebSearch",
+      "Glob",
+      "Grep",
+      "Task",
+      "Skill",
+      "MCP",
+      "TodoWrite",
+      "NotebookEdit",
+      "AskUserQuestion"
     ]
-  }
+  },
+  "defaultMode": "bypassPermissions"
 }
