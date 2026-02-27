@@ -22,8 +22,9 @@ jobs:
       - name: Publish feature to Gitea registry
         env:
           REGISTRY_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          REGISTRY_USER: ${{ secrets.GITEA_USERNAME }}
         run: |
-          echo "${REGISTRY_TOKEN}" | oras login registry.bto.bar -u jaybrto --password-stdin
+          echo "${REGISTRY_TOKEN}" | oras login registry.bto.bar -u "${REGISTRY_USER}" --password-stdin
           devcontainer features publish \
             devcontainer-features/mesh-six-tools \
             --registry registry.bto.bar \
