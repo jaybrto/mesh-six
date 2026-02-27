@@ -31,6 +31,7 @@ resources:
   - llm-service/
   - auth-service/
   - implementer/
+  - onboarding-service/
   - cleanup-cronjob/
   - credential-backup-cronjob/
 
