@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-26: Onboarding Service — Automated Project Onboarding
+
+Dapr Workflow-based service for automating new project onboarding into mesh-six. Three-phase workflow: initialization (GitHub project board, webhooks, database registration, backend provisioning), dev environment provisioning (devcontainer scaffolding, Envbuilder StatefulSet generation, ArgoCD sync), and auth & settings (Claude OAuth device flow, LiteLLM team routing, app settings). Exposes HTTP API and MCP server for programmatic onboarding.
+
+**@mesh-six/onboarding-service@0.1.0**
+- `src/workflow.ts`: Dapr Workflow with 14 activity stubs across 3 phases, `waitForExternalEvent("oauth-code-received")` for OAuth pause/resume
+- `src/index.ts`: Hono HTTP server — `POST /onboard`, `GET /onboard/:id`, `POST /onboard/:id/auth-callback`; `--mcp` flag for stdio MCP mode
+- `src/mcp.ts`: MCP server with `onboard-project`, `get-onboarding-status`, `submit-oauth-code` tools
+- `src/db.ts`: `insertRun`, `getRun`, `updateRunStatus` with dynamic SET clause builder
+- `src/schemas.ts`: Zod schemas — `OnboardProjectRequestSchema`, `AuthCallbackSchema`, `ResourceLimitsSchema`, `LiteLLMConfigSchema`
+- `src/config.ts`: environment variable configuration
+- `src/activities/validate-repo.ts`: Octokit REST — verify repo exists, return metadata
+- `src/activities/create-project-board.ts`: GitHub Projects v2 via GraphQL with custom fields (Session ID, Pod Name, Workflow ID, Priority)
+- `src/activities/register-webhook-secret.ts`: HMAC secret generation and Vault storage
+- `src/activities/register-in-database.ts`: `repo_registry` upsert with project field IDs in metadata JSONB
+- `src/activities/provision-backend.ts`: PostgreSQL connectivity check, MinIO prefix marker creation
+- `src/activities/scaffold-devcontainer.ts`: Push default `devcontainer.json` template to repo if missing
+- `src/activities/generate-kube-manifests.ts`: Generate per-project StatefulSet (Envbuilder), Service, kustomization at `k8s/base/envs/{owner}-{repo}/`
+- `src/activities/update-kustomization.ts`: Append generated env directory to `k8s/base/kustomization.yaml`
+- `src/activities/trigger-sync.ts`: Git commit + push generated manifests
+- `src/activities/verify-pod-health.ts`: Poll kubectl for pod readiness with timeout
+- `src/activities/initiate-claude-oauth.ts`: Claude CLI device flow — parse URL and user code
+- `src/activities/store-claude-credentials.ts`: Push credentials to auth-service via Dapr
+- `src/activities/configure-litellm.ts`: Create LiteLLM team + virtual key with idempotency
+- `src/activities/configure-app-settings.ts`: Push project settings to auth-service
+
+**Database**
+- `migrations/012_onboarding_runs.sql`: `onboarding_runs` table (status, phase tracking, OAuth device URL/code, completed activities), `execution_mode` column on `repo_registry`
+
+**K8s**
+- `k8s/base/onboarding-service/`: Deployment + Service + kustomization (Dapr-annotated, mesh-six-secrets)
+
+### Added - 2026-02-26: Dev Container Feature — mesh-six-tools
+
+Custom devcontainer feature for Envbuilder-based agent pods. Installs tmux, jq, GitHub CLI, and Claude Code CLI from npm. Requires Node.js feature (`ghcr.io/devcontainers/features/node`) as a prerequisite.
+
+**devcontainer-features/mesh-six-tools@1.0.0**
+- `devcontainer-features/mesh-six-tools/devcontainer-feature.json`: Feature manifest — `claudeVersion` option (npm semver, default `latest`), `installsAfter` node feature, `MESH_SIX_TOOLS_VERSION` container env
+- `devcontainer-features/mesh-six-tools/install.sh`: Installs system deps (tmux, curl, jq, watch, ca-certificates, gnupg), GitHub CLI via apt (official keyring), Claude Code CLI via npm global install with version pinning support
+
+**Templates**
+- `templates/devcontainer/devcontainer.json`: Reference devcontainer config using `mcr.microsoft.com/devcontainers/base:ubuntu` with node@22 + mesh-six-tools features, `runner` as remote and container user
+
 ### Added - 2026-02-26: Session REST API (GWA Phase 21 API Layer)
 
 REST API endpoints for mobile app and external dashboard consumption.
