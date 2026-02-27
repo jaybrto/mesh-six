@@ -16,7 +16,9 @@ COPY packages/core/ packages/core/
 COPY apps/dashboard/ apps/dashboard/
 
 ARG VITE_MQTT_URL=__MQTT_URL_PLACEHOLDER__
+ARG VITE_ONBOARDING_URL=__ONBOARDING_URL_PLACEHOLDER__
 ENV VITE_MQTT_URL=${VITE_MQTT_URL}
+ENV VITE_ONBOARDING_URL=${VITE_ONBOARDING_URL}
 
 RUN cd apps/dashboard && bun run build
 
