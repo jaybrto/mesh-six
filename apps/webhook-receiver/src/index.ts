@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { DaprClient } from "@dapr/dapr";
+import pg from "pg";
 import {
   GitHubProjectClient,
   DAPR_PUBSUB_NAME,
@@ -20,20 +21,20 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET || "";
 const GITHUB_PROJECT_ID = process.env.GITHUB_PROJECT_ID || "";
 const GITHUB_STATUS_FIELD_ID = process.env.GITHUB_STATUS_FIELD_ID || "";
+const DATABASE_URL = process.env.DATABASE_URL || "";
+const VAULT_ADDR = process.env.VAULT_ADDR || "";
+const VAULT_TOKEN = process.env.VAULT_TOKEN || "";
 const POLL_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
 const BOARD_EVENTS_TOPIC = "board-events";
 const SEEN_ITEMS_KEY = "webhook-receiver:seen-items";
 const DEDUP_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SECRET_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // --- Dapr Client ---
 const daprClient = new DaprClient({ daprHost: DAPR_HOST, daprPort: DAPR_HTTP_PORT });
 
-// --- GitHub Client ---
-const ghClient = new GitHubProjectClient({
-  token: GITHUB_TOKEN,
-  projectId: GITHUB_PROJECT_ID,
-  statusFieldId: GITHUB_STATUS_FIELD_ID,
-});
+// --- Database Pool ---
+const dbPool = new pg.Pool({ connectionString: DATABASE_URL });
 
 // --- PR/Issue filter config (loaded once at startup from env) ---
 const filterConfig = loadFilterConfigFromEnv();
@@ -51,14 +52,103 @@ const dedupCleanupInterval = setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
+// --- Per-repo Secret Cache ---
+interface SecretCacheEntry {
+  secret: string;
+  fetchedAt: number;
+}
+const secretCache = new Map<string, SecretCacheEntry>();
+
+async function getWebhookSecret(repoFullName: string): Promise<string> {
+  const cached = secretCache.get(repoFullName);
+  if (cached && Date.now() - cached.fetchedAt < SECRET_CACHE_TTL_MS) {
+    return cached.secret;
+  }
+
+  // Vault path uses hyphen separator: owner-name
+  const vaultKey = repoFullName.replace("/", "-");
+  const vaultPath = `${VAULT_ADDR}/v1/secret/data/mesh-six/webhooks/${vaultKey}`;
+
+  try {
+    const resp = await fetch(vaultPath, {
+      headers: { "X-Vault-Token": VAULT_TOKEN },
+    });
+
+    if (resp.ok) {
+      const body = await resp.json() as { data: { data: { secret: string } } };
+      const secret = body.data.data.secret;
+      secretCache.set(repoFullName, { secret, fetchedAt: Date.now() });
+      return secret;
+    }
+
+    console.warn(`[webhook-receiver] Vault lookup failed for ${repoFullName} (${resp.status}), falling back to env`);
+  } catch (err) {
+    console.warn(`[webhook-receiver] Vault lookup error for ${repoFullName}:`, err);
+  }
+
+  // Fall back to global env var for backward compatibility
+  return GITHUB_WEBHOOK_SECRET;
+}
+
+// --- Per-repo Project Client Cache ---
+interface ProjectClientCacheEntry {
+  client: GitHubProjectClient;
+  fetchedAt: number;
+}
+const projectClientCache = new Map<string, ProjectClientCacheEntry>();
+
+async function getProjectClient(repoFullName: string): Promise<GitHubProjectClient> {
+  const cached = projectClientCache.get(repoFullName);
+  if (cached && Date.now() - cached.fetchedAt < SECRET_CACHE_TTL_MS) {
+    return cached.client;
+  }
+
+  const [repoOwner, repoName] = repoFullName.split("/");
+
+  try {
+    const result = await dbPool.query(
+      `SELECT github_project_id, metadata FROM repo_registry WHERE owner = $1 AND name = $2`,
+      [repoOwner, repoName]
+    );
+
+    if (result.rows.length > 0) {
+      const row = result.rows[0];
+      const projectId: string = row.github_project_id;
+      const metadata = typeof row.metadata === "string" ? JSON.parse(row.metadata) : row.metadata;
+      const statusFieldId: string = metadata?.projectFieldIds?.status ?? "";
+
+      const client = new GitHubProjectClient({
+        token: GITHUB_TOKEN,
+        projectId,
+        statusFieldId,
+      });
+
+      projectClientCache.set(repoFullName, { client, fetchedAt: Date.now() });
+      return client;
+    }
+
+    console.warn(`[webhook-receiver] No registry entry found for ${repoFullName}, falling back to env config`);
+  } catch (err) {
+    console.warn(`[webhook-receiver] DB lookup error for ${repoFullName}:`, err);
+  }
+
+  // Fall back to global env vars for backward compatibility
+  const fallback = new GitHubProjectClient({
+    token: GITHUB_TOKEN,
+    projectId: GITHUB_PROJECT_ID,
+    statusFieldId: GITHUB_STATUS_FIELD_ID,
+  });
+  return fallback;
+}
+
 // --- HMAC-SHA256 Signature Verification ---
-async function verifySignature(payload: string, signature: string): Promise<boolean> {
-  if (!GITHUB_WEBHOOK_SECRET) return false;
+async function verifySignature(payload: string, signature: string, secret: string): Promise<boolean> {
+  if (!secret) return false;
 
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
-    encoder.encode(GITHUB_WEBHOOK_SECRET),
+    encoder.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
@@ -176,20 +266,31 @@ app.get("/dapr/subscribe", (c) => {
 app.post("/webhooks/github", async (c) => {
   const rawBody = await c.req.text();
 
-  // 1. HMAC-SHA256 signature validation
+  // 1. Extract repo info from raw payload before signature verification
+  // (we need the repo name to know which secret to use for verification)
+  let repoFullName = "";
+  try {
+    const preparse = JSON.parse(rawBody);
+    repoFullName = preparse?.repository?.full_name ?? "";
+  } catch {
+    // Will fail signature check or be handled below
+  }
+
+  // 2. Look up the per-repo webhook secret and verify HMAC signature
   const signature = c.req.header("X-Hub-Signature-256") || "";
   if (!signature) {
     console.warn("[webhook-receiver] Missing X-Hub-Signature-256 header");
     return c.json({ error: "missing signature" }, 401);
   }
 
-  const valid = await verifySignature(rawBody, signature);
+  const webhookSecret = await getWebhookSecret(repoFullName);
+  const valid = await verifySignature(rawBody, signature, webhookSecret);
   if (!valid) {
     console.warn("[webhook-receiver] Invalid webhook signature");
     return c.json({ error: "invalid signature" }, 401);
   }
 
-  // 2. Dedup by X-GitHub-Delivery
+  // 3. Dedup by X-GitHub-Delivery
   const deliveryId = c.req.header("X-GitHub-Delivery") || "";
   if (deliveryId) {
     if (deliveryDedup.has(deliveryId)) {
@@ -199,7 +300,7 @@ app.post("/webhooks/github", async (c) => {
     deliveryDedup.set(deliveryId, Date.now());
   }
 
-  // 3. Parse event
+  // 4. Parse event
   const eventType = c.req.header("X-GitHub-Event") || "";
   let payload: any;
   try {
@@ -221,13 +322,13 @@ app.post("/webhooks/github", async (c) => {
     return c.json({ status: "ignored", reason: "no project item id" }, 200);
   }
 
-  // 4. Self-move filtering
+  // 5. Self-move filtering
   if (await isSelfMove(projectItemId)) {
     console.log(`[webhook-receiver] Self-move detected for item ${projectItemId}, skipping`);
     return c.json({ status: "self-move" }, 200);
   }
 
-  // 5. Determine column transition from the changes payload
+  // 6. Determine column transition from the changes payload
   const changes = payload.changes || {};
   const fromColumn = changes.field_value?.from?.name as string | undefined;
   const toColumn = changes.field_value?.to?.name as string | undefined;
@@ -257,6 +358,7 @@ app.post("/webhooks/github", async (c) => {
     // The webhook payload for projects_v2_item includes limited info.
     // We query GitHub for the full item details.
     try {
+      const ghClient = await getProjectClient(repoFullName);
       const items = await ghClient.getProjectItemsByColumn(effectiveTo || "");
       const match = items.find((i) => i.id === projectItemId);
       if (match) {
@@ -280,12 +382,14 @@ app.post("/webhooks/github", async (c) => {
     return c.json({ status: "ignored", reason: "no issue info" }, 200);
   }
 
-  // 6. Classify and publish
+  // 7. Classify and publish
   const event = classifyTransition(action, effectiveFrom, effectiveTo, itemInfo);
   if (event) {
     // Apply issue filter for new-todo events
     if (event.type === "new-todo") {
-      const issueInfo = { labels: [] as string[], author: "" };
+      // Extract actual labels from webhook payload
+      const issueLabels = (payload.issue?.labels ?? []).map((l: { name: string }) => l.name);
+      const issueInfo = { labels: issueLabels, author: payload.issue?.user?.login ?? "" };
       if (!shouldProcessIssue(issueInfo, filterConfig)) {
         console.log(`[webhook-receiver] Filtered out issue #${event.issueNumber} by filter rules`);
         return c.json({ status: "filtered" }, 200);
@@ -305,6 +409,9 @@ app.post("/webhooks/github", async (c) => {
 // --- Polling: Query GitHub Projects for Todo items ---
 async function pollTodoItems(): Promise<void> {
   try {
+    // For polling, use the fallback global client since we don't have a specific repo context.
+    // Multi-project polling would require iterating over all registered repos.
+    const ghClient = await getProjectClient("");
     const todoItems = await ghClient.getProjectTodoItems();
     console.log(`[webhook-receiver] Poll found ${todoItems.length} Todo items`);
 
@@ -339,7 +446,7 @@ async function pollTodoItems(): Promise<void> {
           continue;
         }
 
-        // Apply issue filter
+        // Apply issue filter — for polled items we have no label info, pass empty
         const issueInfo = { labels: [] as string[], author: "" };
         if (!shouldProcessIssue(issueInfo, filterConfig)) {
           console.log(`[webhook-receiver] Filtered out issue #${item.issueNumber} by filter rules`);
@@ -386,8 +493,9 @@ async function pollTodoItems(): Promise<void> {
 let pollInterval: Timer | null = null;
 
 async function start(): Promise<void> {
-  // Load column mapping for the GitHub client
+  // Load column mapping for the fallback global client
   try {
+    const ghClient = await getProjectClient("");
     const mapping = await ghClient.loadColumnMapping();
     console.log(`[webhook-receiver] Loaded column mapping: ${Object.keys(mapping).join(", ")}`);
   } catch (err) {
@@ -411,6 +519,8 @@ async function shutdown(): Promise<void> {
     clearInterval(pollInterval);
   }
   clearInterval(dedupCleanupInterval);
+
+  await dbPool.end();
 
   process.exit(0);
 }
