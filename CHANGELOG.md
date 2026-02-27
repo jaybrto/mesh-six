@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - 2026-02-26: Production Readiness — 12 Blockers Resolved
+
+Systematic audit and fix of all blockers preventing first project onboarding.
+
+**@mesh-six/implementer@0.6.0**
+- `actor.ts`: Rewrote `extractBundle()` to download tar.gz from auth-service and extract locally via `zlib.gunzipSync` + ustar tar parsing (was calling nonexistent `POST /bundles/:id/extract`)
+- `actor.ts`: Added `authProjectId` param to `onActivate()` for per-repo credential routing (was fixed to `AUTH_PROJECT_ID` env var)
+- `config.ts`: Removed `AUTH_PROJECT_ID` (replaced by per-task routing)
+- `monitor.ts`: Updated credential re-provisioning to use per-session `authProjectId` from actor state
+
+**@mesh-six/orchestrator@0.4.0**
+- `index.ts`: Fixed `retryTask()` to preserve original task payload (was dispatching with `payload: {}`)
+
+**@mesh-six/project-manager@0.7.0**
+- `index.ts`: Aligned `ProjectState` enum with workflow states (INTAKE, PLANNING, IMPLEMENTATION, QA, REVIEW, ACCEPTED, FAILED). Updated `canTransition()`, `evaluateReviewGate()`, and SYSTEM_PROMPT.
+
+**@mesh-six/webhook-receiver@0.2.0**
+- `index.ts`: Per-repo webhook secret lookup from Vault at `secret/data/mesh-six/webhooks/{owner}-{repo}` with 5-min cache and env var fallback
+- `index.ts`: Per-repo `GitHubProjectClient` instantiation from `repo_registry` metadata with cache and env var fallback
+- `index.ts`: Fixed label filtering — extracts actual labels from webhook payload for `shouldProcessIssue()`
+- Added `pg` dependency for `repo_registry` lookups
+
+**@mesh-six/onboarding-service@0.2.0**
+- `generate-kube-manifests.ts`: Rewrote to commit manifests via Octokit Contents API (was using `Bun.write()` to container filesystem)
+- `update-kustomization.ts`: Rewrote to read/update via Octokit Contents API
+- `trigger-sync.ts`: Simplified to no-op (prior activities now commit via GitHub API)
+- `initiate-claude-oauth.ts`: Replaced nonexistent `--print-device-code` flag with stdout/stderr capture approach
+- `verify-pod-health.ts`: Replaced `kubectl` shell command with in-cluster Kubernetes API via fetch
+- Generated StatefulSet now includes `imagePullSecrets` and removes Dapr health probes from Envbuilder container
+
+**K8s Infrastructure**
+- `k8s/base/onboarding-service/rbac.yaml`: ServiceAccount + Role (pod reader) + RoleBinding
+- `k8s/base/vault-external-secrets-main.yaml`: ExternalSecret for `mesh-six-secrets` (9 keys from Vault)
+- `k8s/overlays/prod/kustomization.yaml`: Added image entries for auth-service, implementer, onboarding-service, context-service
+
+**CI/CD**
+- `.github/workflows/build-deploy.yaml`: Added onboarding-service, context-service to build matrix
+- `.github/workflows/test.yaml`: Added auth-service, implementer, llm-service, context-service, onboarding-service to test matrix
+- `.github/workflows/publish-devcontainer-feature.yaml`: New workflow to publish mesh-six-tools feature to Gitea OCI registry
+
 ### Added - 2026-02-26: Onboarding Service — Automated Project Onboarding
 
 Dapr Workflow-based service for automating new project onboarding into mesh-six. Three-phase workflow: initialization (GitHub project board, webhooks, database registration, backend provisioning), dev environment provisioning (devcontainer scaffolding, Envbuilder StatefulSet generation, ArgoCD sync), and auth & settings (Claude OAuth device flow, LiteLLM team routing, app settings). Exposes HTTP API and MCP server for programmatic onboarding.
