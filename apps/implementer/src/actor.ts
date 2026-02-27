@@ -5,8 +5,10 @@
  * from auth-service, clones the repo, creates a worktree, and starts a Claude
  * CLI session inside tmux.
  */
-import { join } from "path";
+import { join, dirname } from "path";
 import { mkdirSync, existsSync } from "fs";
+import { mkdir } from "fs/promises";
+import zlib from "zlib";
 import { DaprClient } from "@dapr/dapr";
 import {
   type ImplementationSession,
@@ -108,9 +110,10 @@ export class ImplementerActor {
     const worktreeDir = join(WORKTREE_BASE_DIR, `${params.repoOwner}-${params.repoName}`, `issue-${params.issueNumber}`);
 
     // Provision credentials from auth-service via Dapr service invocation
+    const authProjectId = AUTH_PROJECT_ID;
     let bundleId: string | undefined;
     try {
-      bundleId = await this.provisionCredentials();
+      bundleId = await this.provisionCredentials(authProjectId);
     } catch (err) {
       log(`Credential provisioning failed: ${err}`);
       return { ok: false, error: `Credential provisioning failed: ${err}` };
@@ -362,8 +365,8 @@ export class ImplementerActor {
    * Provision credentials from auth-service via Dapr service invocation.
    * Returns the bundle ID on success.
    */
-  private async provisionCredentials(): Promise<string | undefined> {
-    const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/${AUTH_SERVICE_APP_ID}/method/projects/${AUTH_PROJECT_ID}/provision`;
+  private async provisionCredentials(authProjectId: string): Promise<string | undefined> {
+    const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/${AUTH_SERVICE_APP_ID}/method/projects/${authProjectId}/provision`;
 
     const response = await fetch(url, {
       method: "POST",
@@ -383,7 +386,7 @@ export class ImplementerActor {
 
     // Extract bundle to CLAUDE_SESSION_DIR if provisioned
     if (result.status === "provisioned" && result.bundleId) {
-      await this.extractBundle(result.bundleId);
+      await this.extractBundle(result.bundleId, authProjectId);
     }
 
     log(`Credentials provisioned — status: ${result.status}, bundle: ${result.bundleId ?? "current"}`);
@@ -392,19 +395,38 @@ export class ImplementerActor {
 
   /**
    * Download and extract a credential bundle from auth-service.
+   * Uses GET /projects/{authProjectId}/provision/{bundleId} which returns a raw tar.gz blob,
+   * then decompresses and parses the ustar tar format locally.
    */
-  private async extractBundle(bundleId: string): Promise<void> {
-    const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/${AUTH_SERVICE_APP_ID}/method/bundles/${bundleId}/extract`;
+  private async extractBundle(bundleId: string, authProjectId: string): Promise<void> {
+    const url = `http://${DAPR_HOST}:${DAPR_HTTP_PORT}/v1.0/invoke/${AUTH_SERVICE_APP_ID}/method/projects/${authProjectId}/provision/${bundleId}`;
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetDir: CLAUDE_SESSION_DIR }),
-    });
-
+    const response = await fetch(url);
     if (!response.ok) {
-      throw new Error(`Bundle extraction failed: ${response.status} ${response.statusText}`);
+      throw new Error(`Bundle download failed: ${response.status} ${response.statusText}`);
     }
+
+    const compressed = Buffer.from(await response.arrayBuffer());
+    const tar = zlib.gunzipSync(compressed);
+
+    // Parse ustar tar: 512-byte header blocks
+    let offset = 0;
+    while (offset < tar.length) {
+      const header = tar.subarray(offset, offset + 512);
+      if (header.every((b) => b === 0)) break; // end-of-archive marker
+      const name = header.subarray(0, 100).toString("utf-8").replace(/\0/g, "");
+      const size = parseInt(header.subarray(124, 136).toString("utf-8").trim(), 8);
+      offset += 512; // advance past header
+      if (size > 0 && name) {
+        const data = tar.subarray(offset, offset + size);
+        const targetPath = join(CLAUDE_SESSION_DIR, name);
+        await mkdir(dirname(targetPath), { recursive: true });
+        await Bun.write(targetPath, data);
+      }
+      offset += Math.ceil(size / 512) * 512; // advance past data (padded to 512)
+    }
+
+    log(`Bundle ${bundleId} extracted to ${CLAUDE_SESSION_DIR}`);
   }
 
   /**
