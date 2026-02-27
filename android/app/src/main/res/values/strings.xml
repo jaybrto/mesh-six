@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">mesh-six</string>
+    <string name="nav_dashboard">Dashboard</string>
+    <string name="nav_agents">Agents</string>
+    <string name="nav_settings">Settings</string>
+</resources>
