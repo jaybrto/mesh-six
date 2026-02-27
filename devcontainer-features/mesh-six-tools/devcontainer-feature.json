@@ -1,0 +1,19 @@
+{
+  "id": "mesh-six-tools",
+  "version": "1.0.0",
+  "name": "mesh-six Agent Tools",
+  "description": "System tools, Claude CLI, and entrypoint for mesh-six agent pods",
+  "options": {
+    "claudeVersion": {
+      "type": "string",
+      "default": "latest",
+      "description": "Claude Code CLI version (npm semver)"
+    }
+  },
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/node"
+  ],
+  "containerEnv": {
+    "MESH_SIX_TOOLS_VERSION": "${templateOption:claudeVersion}"
+  }
+}
