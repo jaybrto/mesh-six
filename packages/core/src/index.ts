@@ -254,3 +254,23 @@ export {
   getPresignedUrl as getMinioPresignedUrl,
   type MinioConfig,
 } from "./minio.js";
+
+// Mac Mini Scraper Service
+export {
+  ScrapeProviderSchema,
+  ScrapeStatusSchema,
+  ScrapeDispatchPayloadSchema,
+  ScrapeStatusFileSchema,
+  ScrapeAckResponseSchema,
+  SCRAPER_SERVICE_APP_ID,
+  SCRAPER_MINIO_BUCKET,
+  SCRAPER_MINIO_PREFIX,
+  type ScrapeProvider,
+  type ScrapeStatus,
+  type ScrapeDispatchPayload,
+  type ScrapeStatusFile,
+  type ScrapeAckResponse,
+} from "./scraper-types.js";
+
+// OpenTelemetry initialization
+export { initTelemetry, type TelemetryConfig } from "./telemetry.js";

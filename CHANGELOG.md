@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-27: Mac Mini Scraper Service
+
+New stateless RPA worker service for the standalone Mac mini. Acts as the "brawn" for the k3s ResearcherActor — drives Windsurf IDE (Electron) and Gemini web UI (Chrome) via Playwright, communicates via Dapr Service Invocation, and uses the MinIO S3 Claim Check pattern for payload management.
+
+**@mesh-six/scraper-service@0.1.0** (new package)
+- `src/index.ts`: Hono HTTP server with `POST /scrape` fast-ACK endpoint, background task processing, graceful shutdown
+- `src/config.ts`: Environment-driven configuration (Dapr, MinIO, Playwright paths, LiteLLM, OpenTelemetry)
+- `src/minio-lifecycle.ts`: MinIO claim-check lifecycle management — `status.json` transitions (PENDING → IN_PROGRESS → COMPLETED | FAILED), `result.md` upload
+- `src/dapr-events.ts`: Dapr external event raiser — `ScrapeCompleted` event on k3s Dapr Workflow via `raiseEvent` API
+- `src/providers/windsurf.ts`: Windsurf IDE provider — Playwright Electron driver, workspace directory management, keyboard-driven workflow trigger (Meta+Shift+W), file watcher for output.md
+- `src/providers/claude-web.ts`: Gemini web provider — Playwright persistent Chrome context, Gem selection via hamburger menu, LiteLLM-powered accessibility tree parsing for dynamic element location, generation wait with loading indicator detection
+- `src/scraper.test.ts`: Unit tests for Zod schema validation (ScrapeDispatchPayload, ScrapeStatusFile, ScrapeAckResponse)
+
+**@mesh-six/core@0.11.0**
+- `src/scraper-types.ts`: New shared types — `ScrapeDispatchPayloadSchema`, `ScrapeStatusSchema`, `ScrapeStatusFileSchema`, `ScrapeAckResponseSchema`, `ScrapeProviderSchema`, and constants (`SCRAPER_SERVICE_APP_ID`, `SCRAPER_MINIO_BUCKET`, `SCRAPER_MINIO_PREFIX`)
+- `src/telemetry.ts`: New shared OpenTelemetry initialization module — `initTelemetry()` with OTLP HTTP trace exporter, HTTP auto-instrumentation, graceful shutdown. Standardizes distributed tracing across k3s and macOS workers.
+- `src/index.ts`: Exported new scraper types and telemetry module
+
+**Scripts**
+- `scripts/test-scraper.ts`: End-to-end test script — health check, scrape dispatch, task polling, MinIO result verification with detailed troubleshooting output
+
 ### Added - 2026-02-27: Remaining Production Readiness Fixes
 
 Resolved 6 remaining items from production readiness audit: orchestrator state persistence, dashboard onboarding view, configurable ntfy notifications, OAuth hardening, webhook K8s env vars, and E2E CI wiring.
