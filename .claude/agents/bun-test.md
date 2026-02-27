@@ -69,7 +69,7 @@ describe("AgentScorer", () => {
 
 - Mock Dapr client: `mock.module("@dapr/dapr", () => ({ ... }))`
 - Mock PostgreSQL: mock the `pg` Pool's `query` method
-- Mock LLM: mock `@ai-sdk/openai` or intercept LiteLLM calls
+- Mock LLM: mock `@mesh-six/core` llm module (`tracedChatCompletion`, `chatCompletionWithSchema`) or intercept LiteLLM fetch calls
 - Mock Mem0: mock `@mesh-six/core` memory exports
 
 ## Rules
