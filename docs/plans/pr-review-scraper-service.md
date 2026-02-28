@@ -1,7 +1,8 @@
-You are a Senior Staff Engineer working on Multi Agent platform called Mesh Six. There is a new PR that needs your review that includes an agent dapr workflow with activities between the Researcher Agent Dapr Actor and the Scraper Agent Dapr Service. The branch is already loaded here and the changes you will be reviewing is the last commit with id 5ad4efd2f6870cf252441657cadc33eeebf7349a. Review the work and provide a code quality and gap analysis review along with any recommendations you would make.
-The Mesh Six master plan is available here: docs/PLAN.md which is the overarching plan for the project. This is a large document so please refer to it as needed.
+You are a Senior Staff Engineer working on Multi Agent platform called Mesh Six. There is a new PR that includes an agent dapr workflow with activities between the Researcher Agent Dapr Actor and the Scraper Agent Dapr Service. You will Analyze everything including the master implementation plan and the initial implementation plan that was followed. This PR was reviewed by 3 AI models and below are their reviews and recommendations. You are to incorporate the best parts of their feedback into your analysis when making your changes here. The branch is already loaded here and the changes you will be making will go to this same branch. The Mesh Six master plan is available here: @docs/PLAN.md which is the overarching plan for the project. When complete, provide a summary of the changes made and the reasoning behind them.
 
-The PR is as follows:
+# The PR is as follows:
+Github PR # 14 : https://github.com/jaybrto/mesh-six/pull/14
+
 <pr>
 Branch: claude/mac-mini-scraper-service-783Q2
 
@@ -21,10 +22,9 @@ polling, and MinIO verification
 
 </pr>
 
-The initial implementation plan that was followed
-<spec>
+# The initial implementation plan that was followed
 
-# Mesh-Six Mac Mini Scraper Service Implementation Plan
+<spec>
 
 ## System Context & Goal
 
@@ -95,8 +95,10 @@ Body: `"{minioFolderPath}/result.md"`
 
 </spec>
 
-# Review findings
-Gemini 3 Pro
+---
+
+# Gemini 3 Pro Review
+
 <gemini-3-pro>
 ### Areas for Improvement (Code Quality)
 - **Typing the Prompt in Windsurf**: In `windsurf.ts`, the code writes the prompt to a file (`promptPath = join(workspaceDir, "prompt.md")`), but then *also* uses `window.keyboard.type(prompt, { delay: 10 })` to type the entire prompt into the UI. For very large prompts, typing character-by-character can take minutes and is prone to OS-level interruptions.
@@ -127,11 +129,118 @@ Gemini 3 Pro
 
 </gemini-3-pro>
 
-GPT 5.3 Codex
+---
+
+# GPT 5.3 Codex Review
+
 <gpt-5-3-codex>
+
+Applied your saved preference that `ScrapeCompleted` can be a **new contract** for this PR.
+
+## Findings
+
+### Critical
+
+1. **Single-host UI automation can run concurrently (race/collision risk)**
+   - The service only rejects duplicate `taskId`s, not concurrent tasks globally (`activeTasks` is a set, not a concurrency gate), so multiple `/scrape` requests can execute in parallel.  
+   - Refs: @apps/scraper-service/src/index.ts#94-113, @apps/scraper-service/src/providers/claude-web.ts#37-48, @apps/scraper-service/src/providers/windsurf.ts#37-41
+   - **Why this matters:** the Mac mini is effectively a single interactive desktop target; parallel sessions can lock the same Chrome profile / interfere with UI state.
+   - **Recommendation (near-term):** enforce `maxConcurrency=1` (mutex/semaphore) and return `REJECTED`/`429` while busy.
+
+---
+
+### High
+
+2. **Telemetry is effectively optional despite spec requiring mandatory OTEL**
+   - Telemetry initializes only when `OTEL_EXPORTER_OTLP_ENDPOINT` is explicitly set.
+   - Refs: @apps/scraper-service/src/index.ts#20-23, @apps/scraper-service/src/config.ts#41-42, @docs/plans/pr-review-scraper-service.md#35-37
+   - **Risk:** missing distributed traces from scraper-service in default deployments.
+   - **Recommendation (near-term):** always initialize OTEL with config default endpoint; add an explicit opt-out flag if needed.
+
+3. **`/scrape` rejection payload can violate exported ACK schema**
+   - Schema requires `taskId` UUID, but invalid payload path returns `taskId: "unknown"` (or unchecked input).
+   - Refs: @packages/core/src/scraper-types.ts#42-45, @apps/scraper-service/src/index.ts#83-87
+   - **Risk:** downstream parser expecting `ScrapeAckResponseSchema` can fail on legitimate rejection paths.
+   - **Recommendation (near-term):** split response schemas (`ValidationErrorResponse` vs `ScrapeAckResponse`) or relax ACK schema for rejected/invalid inputs.
+
+4. **Readiness probe does not validate dependencies**
+   - `/readyz` always returns OK, regardless of MinIO creds/reachability or Dapr callback availability.
+   - Refs: @apps/scraper-service/src/index.ts#67-68, @apps/scraper-service/src/config.ts#15-17
+   - **Risk:** orchestration can route work to a service that cannot complete claim-check lifecycle.
+   - **Recommendation (near-term):** readiness should verify required config + lightweight MinIO/Dapr checks.
+
+---
+
+### Medium
+
+5. **Workflow callback endpoint is rigid and not externally configurable**
+   - `workflowName` defaults to hardcoded `"FeatureWorkflow"` in code path.
+   - Refs: @apps/scraper-service/src/dapr-events.ts#22-29
+   - **Risk:** coupling to one workflow name/environment; fragile in multi-workflow or renamed workflows.
+   - **Recommendation (near-term):** move workflow/event naming into config; include contract version in payload.
+
+6. **Successful scrape can be reclassified as `FAILED` on callback error**
+   - Flow marks `COMPLETED`, then if [raiseScrapeCompleted](cci:1://file:///Users/jay.barreto/.windsurf/worktrees/mesh-six/mesh-six-9bba61c6/apps/scraper-service/src/dapr-events.ts:16:0-48:1) fails, catch block marks `FAILED`.
+   - Refs: @apps/scraper-service/src/index.ts#162-175, @apps/scraper-service/src/index.ts#180-195
+   - **Risk:** `status.json` may represent notification failure, not scrape execution result.
+   - **Recommendation (near-term):** distinguish execution status from callback status (e.g., `COMPLETED` + `callbackError` field).
+
+7. **Claude/Gemini fallback selector logic is brittle**
+   - Accessibility fallback builds selectors like `[role="..."][name="..."]` (`name` isn’t a reliable DOM attribute), and LLM selector output is used verbatim.
+   - Refs: @apps/scraper-service/src/providers/claude-web.ts#167-173, @apps/scraper-service/src/providers/claude-web.ts#301-309, @apps/scraper-service/src/providers/claude-web.ts#65-72
+   - **Risk:** high runtime flakiness when common selectors fail.
+   - **Recommendation (near-term):** validate selector before use; fallback to robust locator strategies (`aria-label`, role+text locators) and structured LLM output contract.
+
+8. **Spec gap: `@google/genai` integration called out but not implemented**
+   - Spec explicitly mentions integrating LiteLLM + `@google/genai`.
+   - Refs: @docs/plans/pr-review-scraper-service.md#84-87, @apps/scraper-service/package.json#12-24, @apps/scraper-service/src/providers/claude-web.ts#268-290
+   - **Risk:** implementation/spec mismatch and unclear ownership of model/tooling behavior.
+   - **Recommendation (near-term):** either implement the SDK integration or update spec/changelog to reflect the actual LiteLLM-only approach.
+
+9. **PR narrative implies workflow/actor handshake, but commit scope is mostly service-side**
+   - PR prompt frames workflow activities between ResearcherActor and scraper-service; current PM workflow shown in repo waits on other event types (`impl-event`, `qa-event`, `human-answer`) and not scraper events.
+   - Refs: @docs/plans/pr-review-scraper-service.md#1-21, @apps/project-manager/src/workflow.ts#917-919, @apps/project-manager/src/workflow.ts#999-1000
+   - **Risk:** end-to-end contract remains unproven in-repo for this commit.
+   - **Recommendation (longer-term):** add integration contract tests (dispatch payload + external event wake-up path).
+
+10. **Test coverage gap vs stated intent**
+   - Test header says MinIO lifecycle and Dapr events are validated, but tests are schema-only.
+   - Refs: @apps/scraper-service/src/scraper.test.ts#2-5, @apps/scraper-service/src/scraper.test.ts#19-153
+   - **Risk:** regressions in lifecycle transitions, callback failures, and provider orchestration are unguarded.
+   - **Recommendation (near-term):** add unit tests for [minio-lifecycle.ts](cci:7://file:///Users/jay.barreto/.windsurf/worktrees/mesh-six/mesh-six-9bba61c6/apps/scraper-service/src/minio-lifecycle.ts:0:0-0:0), [dapr-events.ts](cci:7://file:///Users/jay.barreto/.windsurf/worktrees/mesh-six/mesh-six-9bba61c6/apps/scraper-service/src/dapr-events.ts:0:0-0:0), and `/scrape` handler behavior (including error paths).
+
+---
+
+## Questions
+
+1. Should scraper-service be **strictly single-flight** (one task at a time), or do you want queued execution semantics?
+   - Answer: Strictly single-flight for now. The Dapr workflow acts like the queue here, so we don't need to worry about queuing at the service level.
+2. For the new `ScrapeCompleted` contract, do you want to standardize a versioned envelope now (e.g., `{ contractVersion, taskId, minioResultPath, success, error? }`)?
+   - Answer: Yes, standardize a versioned envelope.
+
+---
+
+## Summary
+
+This PR adds a solid baseline (clear module split, fast-ACK route, claim-check lifecycle, provider abstractions, shared schemas), but it has production risks centered on **concurrency safety**, **operational readiness/telemetry**, and **contract/test hardening**.
+
+**Top near-term hardening priorities:**
+1. Enforce single-task concurrency.
+2. Fix ACK schema mismatch for rejected invalid payloads.
+3. Make readiness dependency-aware.
+4. Always initialize OTEL (or explicit opt-out).
+5. Add lifecycle + callback + route error-path tests.
+
+**Longer-term improvements:**
+1. Version and formalize `ScrapeCompleted` contract.
+2. Strengthen provider selector robustness strategy.
+3. Add true end-to-end contract tests across workflow/actor/service boundaries.
 </gpt-5-3-codex>
 
-Claude Opus 4.6
+---
+
+# Claude Opus 4.6 Review    
+
 <claude-opus-4.6>
 ### Issues
 

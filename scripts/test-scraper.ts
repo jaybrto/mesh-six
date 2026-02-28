@@ -3,7 +3,7 @@
  * End-to-end test script for the Mac Mini Scraper Service.
  *
  * Usage:
- *   bun run scripts/test-scraper.ts [--provider windsurf|claude] [--url http://localhost:3000]
+ *   bun run scripts/test-scraper.ts [--provider windsurf|gemini] [--url http://localhost:3000]
  *
  * This script:
  * 1. Checks the scraper service is healthy
@@ -16,7 +16,7 @@
  *   - Scraper service running (bun run --filter @mesh-six/scraper-service dev)
  *   - MinIO accessible (or set MOCK_MINIO=true for dry run)
  *   - For 'windsurf' provider: Windsurf IDE installed and accessible
- *   - For 'claude' provider: Chrome profile with Gemini auth cookies
+ *   - For 'gemini' provider: Chrome profile with Gemini auth cookies
  */
 
 import {
@@ -28,7 +28,7 @@ import {
 
 // --- Parse CLI args ---
 const args = process.argv.slice(2);
-const provider = getArg(args, "--provider") || "claude";
+const provider = getArg(args, "--provider") || "gemini";
 const baseUrl = getArg(args, "--url") || "http://localhost:3000";
 const mockMinio = process.env.MOCK_MINIO === "true";
 const taskId = crypto.randomUUID();
@@ -166,7 +166,7 @@ if (!completed) {
     "    3. For windsurf: Is the Windsurf IDE installed and accessible?",
   );
   console.error(
-    "    4. For claude: Is the Chrome profile authenticated with Gemini?",
+    "    4. For gemini: Is the Chrome profile authenticated with Gemini?",
   );
   process.exit(1);
 }

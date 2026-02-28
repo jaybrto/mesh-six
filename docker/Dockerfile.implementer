@@ -28,8 +28,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Claude CLI
-RUN curl -fsSL https://claude.ai/install.sh | sh
+# Install Claude CLI (use bun install -g, same as Dockerfile.llm-service)
+RUN bun install -g @anthropic-ai/claude-code && \
+    chmod a+x /root && chmod -R a+rX /root/.bun
 
 # Copy installed deps + source from builder
 COPY --from=builder /app .

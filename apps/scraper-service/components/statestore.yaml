@@ -1,0 +1,10 @@
+# Local Dapr state store for standalone Mac mini mode.
+# Uses in-memory store for development; replace with Redis for production.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.in-memory
+  version: v1
+  metadata: []

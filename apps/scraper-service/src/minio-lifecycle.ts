@@ -70,10 +70,12 @@ export async function markCompleted(
   taskId: string,
   provider: ScrapeProvider,
 ): Promise<void> {
+  const existing = await readStatusFile(client, bucket, folderPath);
   const status: ScrapeStatusFile = {
     taskId,
     status: "COMPLETED",
     provider,
+    startedAt: existing?.startedAt,
     completedAt: new Date().toISOString(),
   };
   await writeStatusFile(client, bucket, folderPath, status);
@@ -88,15 +90,41 @@ export async function markFailed(
   provider: ScrapeProvider,
   error: string,
 ): Promise<void> {
+  const existing = await readStatusFile(client, bucket, folderPath);
   const status: ScrapeStatusFile = {
     taskId,
     status: "FAILED",
     provider,
+    startedAt: existing?.startedAt,
     completedAt: new Date().toISOString(),
     error,
   };
   await writeStatusFile(client, bucket, folderPath, status);
   console.log(`[minio] ${folderPath}/status.json → FAILED: ${error}`);
+}
+
+/**
+ * Record a callback error on an existing status.json without changing the status.
+ * Used when the scrape itself succeeded (COMPLETED) but the Dapr workflow
+ * notification failed — preserves the execution result while flagging the issue.
+ */
+export async function markCallbackError(
+  client: S3Client,
+  bucket: string,
+  folderPath: string,
+  callbackError: string,
+): Promise<void> {
+  const existing = await readStatusFile(client, bucket, folderPath);
+  if (!existing) {
+    console.error(`[minio] Cannot record callback error — no existing status.json at ${folderPath}`);
+    return;
+  }
+  const updated: ScrapeStatusFile = {
+    ...existing,
+    callbackError,
+  };
+  await writeStatusFile(client, bucket, folderPath, updated);
+  console.log(`[minio] ${folderPath}/status.json → ${existing.status} + callbackError`);
 }
 
 export async function uploadResult(

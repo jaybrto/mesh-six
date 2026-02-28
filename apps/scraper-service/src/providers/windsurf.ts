@@ -11,7 +11,7 @@
  */
 
 import { _electron as electron } from "playwright";
-import { existsSync, mkdirSync, watch } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { config } from "../config.js";
 
@@ -54,9 +54,10 @@ export async function executeWindsurf(
     await window.keyboard.press("Meta+Shift+W");
     await window.waitForTimeout(1_000);
 
-    // Type the prompt into the workflow input
+    // Type a short instruction referencing the prompt file (avoids typing
+    // the entire raw prompt character-by-character which is slow and fragile)
     await window.keyboard.type(
-      `Process this task in workspace ${workspaceDir}:\n\n${prompt}\n\nSave your output to ${workspaceDir}/output.md when complete.`,
+      `Read the instructions in prompt.md in this workspace and execute them. Save your output to output.md when complete.`,
       { delay: 10 },
     );
 
@@ -84,51 +85,33 @@ async function waitForOutput(
   outputPath: string,
   donePath: string,
 ): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const startTime = Date.now();
+  const startTime = Date.now();
 
-    const interval = setInterval(async () => {
-      // Check timeout
-      if (Date.now() - startTime > MAX_WAIT_MS) {
-        clearInterval(interval);
-        reject(
-          new Error(
-            `[windsurf] Timed out waiting for output after ${MAX_WAIT_MS / 1_000}s`,
-          ),
-        );
-        return;
-      }
-
-      // Check for output file
+  while (Date.now() - startTime < MAX_WAIT_MS) {
+    // .done is the authoritative signal that the writer has finished.
+    // Check it first to avoid reading a partially-written output.md.
+    if (existsSync(donePath)) {
+      // Small delay in case output.md flush is still in progress
+      await Bun.sleep(500);
       if (existsSync(outputPath)) {
-        clearInterval(interval);
-        try {
-          const content = await Bun.file(outputPath).text();
-          resolve(content);
-        } catch (err) {
-          reject(new Error(`[windsurf] Failed to read output: ${err}`));
-        }
-        return;
+        const content = await Bun.file(outputPath).text();
+        return content;
       }
+      throw new Error("[windsurf] .done flag found but output.md missing");
+    }
 
-      // Check for .done flag (output.md may have been created first)
-      if (existsSync(donePath)) {
-        clearInterval(interval);
-        // Small delay in case output.md is still being written
-        await Bun.sleep(500);
-        if (existsSync(outputPath)) {
-          try {
-            const content = await Bun.file(outputPath).text();
-            resolve(content);
-          } catch (err) {
-            reject(new Error(`[windsurf] Failed to read output: ${err}`));
-          }
-        } else {
-          reject(
-            new Error("[windsurf] .done flag found but output.md missing"),
-          );
-        }
-      }
-    }, POLL_INTERVAL_MS);
-  });
+    // Fallback: if output.md appears without a .done flag (e.g. manual run),
+    // wait an extra cycle to let any in-flight writes finish before reading.
+    if (existsSync(outputPath)) {
+      await Bun.sleep(POLL_INTERVAL_MS);
+      const content = await Bun.file(outputPath).text();
+      return content;
+    }
+
+    await Bun.sleep(POLL_INTERVAL_MS);
+  }
+
+  throw new Error(
+    `[windsurf] Timed out waiting for output after ${MAX_WAIT_MS / 1_000}s`,
+  );
 }

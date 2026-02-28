@@ -5,7 +5,7 @@ import { z } from "zod";
 // ---------------------------------------------------------------------------
 
 /** Target UI provider for the scraper to drive */
-export const ScrapeProviderSchema = z.enum(["windsurf", "claude"]);
+export const ScrapeProviderSchema = z.enum(["windsurf", "gemini"]);
 export type ScrapeProvider = z.infer<typeof ScrapeProviderSchema>;
 
 /** Status of a scrape job tracked via MinIO status.json claim check */
@@ -35,16 +35,26 @@ export const ScrapeStatusFileSchema = z.object({
   startedAt: z.string().datetime().optional(),
   completedAt: z.string().datetime().optional(),
   error: z.string().optional(),
+  /** Set when scrape succeeded but the Dapr workflow callback failed */
+  callbackError: z.string().optional(),
 });
 export type ScrapeStatusFile = z.infer<typeof ScrapeStatusFileSchema>;
 
-/** Response from the /scrape endpoint (fast-ACK) */
+/** Successful ACK response from the /scrape endpoint */
 export const ScrapeAckResponseSchema = z.object({
   status: z.enum(["STARTED", "REJECTED"]),
   taskId: z.string().uuid(),
   message: z.string().optional(),
 });
 export type ScrapeAckResponse = z.infer<typeof ScrapeAckResponseSchema>;
+
+/** Error response for invalid/unparseable payloads (taskId may not be a valid UUID) */
+export const ScrapeValidationErrorSchema = z.object({
+  status: z.literal("REJECTED"),
+  taskId: z.string(),
+  message: z.string(),
+});
+export type ScrapeValidationError = z.infer<typeof ScrapeValidationErrorSchema>;
 
 // ---------------------------------------------------------------------------
 // Constants
