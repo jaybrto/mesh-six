@@ -28,7 +28,16 @@ import type {
   ImplEventPayload,
   QaEventPayload,
   HumanAnswerPayload,
+  ResearchAndPlanInput,
+  ResearchAndPlanOutput,
 } from "@mesh-six/core";
+
+import {
+  researchAndPlanSubWorkflow,
+  registerResearchWorkflow,
+  isResearchWorkflowAvailable,
+} from "./research-sub-workflow.js";
+import type { ResearchActivityImplementations } from "./research-activities.js";
 
 import {
   buildTemplate,
@@ -726,6 +735,40 @@ export const projectWorkflow: TWorkflow = async function* (
       issueTitle,
     });
 
+    // -----------------------------------------------------------------------
+    // Research sub-workflow: invoke if architect triage says deep research needed.
+    // Wired into main PM path per GPT-High-1 review finding.
+    //
+    // Uses yield* generator delegation — all sub-workflow activity yields
+    // flow through the main workflow's orchestration context, preserving
+    // Dapr replay determinism without needing a child orchestration API.
+    //
+    // Guarded by isResearchWorkflowAvailable() — skips if MinIO/PG not
+    // configured (research activities won't be registered).
+    // -----------------------------------------------------------------------
+    let researchPlanSection = "";
+    if (isResearchWorkflowAvailable()) {
+      const researchResult: ResearchAndPlanOutput = yield* researchAndPlanSubWorkflow(
+        ctx,
+        {
+          taskId: `research-${issueNumber}-${Date.now()}`,
+          issueNumber,
+          issueTitle,
+          repoOwner,
+          repoName,
+          workflowId,
+          architectActorId,
+          projectItemId,
+        } satisfies ResearchAndPlanInput,
+      );
+
+      if (researchResult.plan) {
+        researchPlanSection = `\n\nResearch-based implementation plan:\n${researchResult.plan}`;
+      }
+    } else {
+      console.log(`[Workflow] Research sub-workflow not available (MinIO not configured), skipping for issue #${issueNumber}`);
+    }
+
     // Build planning prompt from template (falls back to inline string on error)
     const planningPromptBase = await buildTemplate("prompt", {
       ISSUE_NUMBER: issueNumber,
@@ -736,7 +779,7 @@ export const projectWorkflow: TWorkflow = async function* (
     });
     const planningPrompt = planningPromptBase ||
       `Plan the implementation for issue #${issueNumber}: ${issueTitle}`;
-    const implementationPrompt = `${planningPrompt}\n\nArchitect guidance:\n${architectResult.guidance}`;
+    const implementationPrompt = `${planningPrompt}\n\nArchitect guidance:\n${architectResult.guidance}${researchPlanSection}`;
 
     // Start planning session via ImplementerActor
     const planSession: StartSessionOutput = yield ctx.callActivity(
@@ -1246,6 +1289,8 @@ export interface WorkflowActivityImplementations {
   postProgressComment: typeof postProgressCommentActivity;
   syncPlanToIssue: typeof syncPlanToIssueActivity;
   updateProjectCustomFields: typeof updateProjectCustomFieldsActivity;
+  // Research sub-workflow activities (optional — only needed if research feature is enabled)
+  researchActivities?: ResearchActivityImplementations;
 }
 
 // ---------------------------------------------------------------------------
@@ -1294,6 +1339,12 @@ export function createWorkflowRuntime(
 
   // Register the workflow
   runtime.registerWorkflow(projectWorkflow);
+
+  // Register research sub-workflow and activities if provided
+  if (activityImpls.researchActivities) {
+    registerResearchWorkflow(runtime, activityImpls.researchActivities);
+    console.log("[Workflow] Research sub-workflow registered");
+  }
 
   // Register all activities
   runtime.registerActivity(consultArchitectActivity);

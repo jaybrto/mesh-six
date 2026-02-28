@@ -1,305 +1,381 @@
 /**
- * ResearchAndPlan Sub-Workflow
+ * ResearchAndPlan Sub-Workflow — Dapr Durable Workflow
  *
- * Implements the triage-escalate-review loop for complex architectural planning.
- * Pattern: Architect triages → Researcher dispatches deep research → Review loop → Draft plan.
+ * Orchestrates: triage → deep research → review → plan drafting.
+ * The Architect triages via Gemini Pro, dispatches to the scraper service,
+ * hibernates (0 CPU) while awaiting results, then validates via Gemini Flash
+ * before synthesizing a final implementation plan.
  *
- * Uses the Claim Check pattern via MinIO for large research documents, and
- * Dapr external events for async scraper coordination.
- *
- * Flow:
- *   1. Architect triages the task (needs deep research?)
- *   2. If yes: dispatch scraper → hibernate (0 CPU) → wake on event/timeout
- *   3. Researcher reviews raw scrape → approve or loop
- *   4. Architect drafts final plan from triage context + clean research
+ * Critical fixes from PR #13 review:
+ *   - C1:  No Promise.race — yields each Dapr task individually with
+ *          whenAny()-equivalent pattern via separate yield + cancel.
+ *   - C2:  Timeout detection compares winning task reference against the
+ *          timer object — no ambiguous null/undefined check.
+ *   - H3:  Uses SCRAPE_COMPLETED_EVENT constant (not hardcoded string).
+ *   - H5:  research_cycles incremented at cycle start (aligned with DB).
+ *   - GPT-H2: Explicit MinIO keys — no string-replacement derivation.
+ *   - Gemini-3: Failure context injected into DraftPlan when research
+ *               fails or times out.
+ *   - Sonnet-11: Proper generator return type annotation.
  */
 
 import {
-  WorkflowActivityContext,
+  WorkflowRuntime,
   WorkflowContext,
   type TWorkflow,
-  WorkflowRuntime,
 } from "@dapr/dapr";
+import { whenAny } from "@microsoft/durabletask-js";
 
 import type {
+  ResearchAndPlanInput,
+  ResearchAndPlanOutput,
   ArchitectTriageInput,
-  TriageOutput,
+  ArchitectTriageOutput,
   StartDeepResearchInput,
   StartDeepResearchOutput,
   ReviewResearchInput,
   ReviewResearchOutput,
-  DraftPlanInput,
+  ArchitectDraftPlanInput,
   SendPushNotificationInput,
-  ResearchAndPlanInput,
-  ResearchAndPlanOutput,
+  UpdateResearchSessionInput,
+  ScrapeCompletedPayload,
 } from "@mesh-six/core";
 
 import {
-  RESEARCH_TIMEOUT_MS,
+  SCRAPE_COMPLETED_EVENT,
   MAX_RESEARCH_CYCLES,
+  RESEARCH_TIMEOUT_MS,
 } from "@mesh-six/core";
 
+import type { ResearchActivityImplementations, ReflectAndStoreInput } from "./research-activities.js";
+
 // ---------------------------------------------------------------------------
-// Activity stubs — wired at runtime via registerResearchActivities()
+// Activity type alias (matches workflow.ts pattern)
 // ---------------------------------------------------------------------------
 
 type ActivityFn<TInput = unknown, TOutput = unknown> = (
-  ctx: WorkflowActivityContext,
+  ctx: import("@dapr/dapr").WorkflowActivityContext,
   input: TInput,
 ) => Promise<TOutput>;
 
-export let architectTriageActivity: ActivityFn<ArchitectTriageInput, TriageOutput> =
-  async () => { throw new Error("architectTriageActivity not initialized"); };
+// ---------------------------------------------------------------------------
+// Activity stubs — wired at registration time via registerResearchWorkflow()
+// ---------------------------------------------------------------------------
 
-export let startDeepResearchActivity: ActivityFn<StartDeepResearchInput, StartDeepResearchOutput> =
-  async () => { throw new Error("startDeepResearchActivity not initialized"); };
+let architectTriageActivity: ActivityFn<ArchitectTriageInput, ArchitectTriageOutput>;
+let startDeepResearchActivity: ActivityFn<StartDeepResearchInput, StartDeepResearchOutput>;
+let reviewResearchActivity: ActivityFn<ReviewResearchInput, ReviewResearchOutput>;
+let architectDraftPlanActivity: ActivityFn<ArchitectDraftPlanInput, string>;
+let sendPushNotificationActivity: ActivityFn<SendPushNotificationInput, void>;
+let updateResearchSessionActivity: ActivityFn<UpdateResearchSessionInput, void>;
+let reflectAndStoreActivity: ActivityFn<ReflectAndStoreInput, void>;
 
-export let reviewResearchActivity: ActivityFn<ReviewResearchInput, ReviewResearchOutput> =
-  async () => { throw new Error("reviewResearchActivity not initialized"); };
+/** Whether research activities have been registered (false if MinIO not configured) */
+let researchActivitiesRegistered = false;
 
-export let architectDraftPlanActivity: ActivityFn<DraftPlanInput, string> =
-  async () => { throw new Error("architectDraftPlanActivity not initialized"); };
-
-export let sendPushNotificationActivity: ActivityFn<SendPushNotificationInput, void> =
-  async () => { throw new Error("sendPushNotificationActivity not initialized"); };
+/** Check if the research sub-workflow is available (activities registered) */
+export function isResearchWorkflowAvailable(): boolean {
+  return researchActivitiesRegistered;
+}
 
 // ---------------------------------------------------------------------------
 // Sub-Workflow Definition
 // ---------------------------------------------------------------------------
 
 /**
- * ResearchAndPlanSubWorkflow — called from the main projectWorkflow via
- * ctx.callActivity or registered as a child workflow.
+ * ResearchAndPlan sub-workflow generator.
  *
- * This is a Dapr Durable Workflow (generator function) that orchestrates
- * the triage → research → review → plan pipeline.
+ * Called from the main projectWorkflow when the complexity gate indicates
+ * the issue needs deep research before planning.
  */
 export const researchAndPlanSubWorkflow: TWorkflow = async function* (
   ctx: WorkflowContext,
   input: ResearchAndPlanInput,
-): any {
+): AsyncGenerator<unknown, ResearchAndPlanOutput> {
   const {
     taskId,
     issueNumber,
+    issueTitle,
     repoOwner,
     repoName,
-    issueTitle,
-    issueBody,
     workflowId,
     architectActorId,
-    architectGuidance,
   } = input;
 
   console.log(
-    `[ResearchSubWorkflow] Starting for task ${taskId}, issue #${issueNumber}`,
+    `[ResearchSubWorkflow] Starting for task ${taskId}: "${issueTitle}"`,
   );
 
   // =========================================================================
-  // Phase 1: Triage — Architect determines if deep research is needed
+  // Phase 0: Triage — Architect decides if deep research is needed
   // =========================================================================
 
-  const triageResult: TriageOutput = yield ctx.callActivity(
+  const triageResult: ArchitectTriageOutput = yield ctx.callActivity(
     architectTriageActivity,
     {
       taskId,
       issueNumber,
+      issueTitle,
       repoOwner,
       repoName,
-      issueTitle,
-      issueBody,
-      architectGuidance,
+      workflowId,
     } satisfies ArchitectTriageInput,
   );
 
   let isResearchComplete = !triageResult.needsDeepResearch;
   let finalResearchDocId: string | null = null;
+  let currentPrompt = triageResult.researchPrompt || triageResult.context;
   let totalResearchCycles = 0;
-  let currentFollowUpPrompt: string | undefined;
   let timedOut = false;
-
-  console.log(
-    `[ResearchSubWorkflow] Triage complete for task ${taskId}: needsDeepResearch=${triageResult.needsDeepResearch}, complexity=${triageResult.complexity}`,
-  );
+  let failureReason: string | undefined;
+  const sessionId = triageResult.sessionId;
 
   // =========================================================================
-  // Phase 2: Iterative Deep Research Loop
+  // Phase 1 & 2: Iterative Deep Research Loop
   // =========================================================================
 
   while (!isResearchComplete && totalResearchCycles < MAX_RESEARCH_CYCLES) {
+    // Increment cycle counter at loop start (fixes H5 — aligned with DB)
     totalResearchCycles++;
     console.log(
-      `[ResearchSubWorkflow] Research cycle ${totalResearchCycles}/${MAX_RESEARCH_CYCLES} for task ${taskId}`,
+      `[ResearchSubWorkflow] Research cycle ${totalResearchCycles}/${MAX_RESEARCH_CYCLES} for ${taskId}`,
     );
 
-    // --- Dispatch research and hibernate ---
-    const researchPrompt = currentFollowUpPrompt
-      ? `Follow-up research: ${currentFollowUpPrompt}\n\nOriginal context: ${triageResult.context}`
-      : `Research the following for issue #${issueNumber} (${issueTitle}):\n\n${triageResult.context}`;
+    // Update DB cycle count at start of each cycle (fixes H5)
+    if (sessionId) {
+      yield ctx.callActivity(updateResearchSessionActivity, {
+        sessionId,
+        status: "DISPATCHED",
+        researchCycles: totalResearchCycles,
+      } satisfies UpdateResearchSessionInput);
+    }
 
+    // --- Dispatch to scraper ---
     const dispatchResult: StartDeepResearchOutput = yield ctx.callActivity(
       startDeepResearchActivity,
       {
         taskId,
-        prompt: researchPrompt,
-        researchQuestions: triageResult.researchQuestions,
-        suggestedSources: triageResult.suggestedSources,
-        followUpPrompt: currentFollowUpPrompt,
+        workflowId,
+        prompt: currentPrompt,
+        followUpPrompt: totalResearchCycles > 1 ? currentPrompt : undefined,
+        sessionId,
       } satisfies StartDeepResearchInput,
     );
 
-    let scrapeResultKey: string | null = null;
-
-    if (dispatchResult.status === "COMPLETED") {
-      // Claim check: research already done (idempotent)
-      console.log(
-        `[ResearchSubWorkflow] Research already completed for task ${taskId}`,
-      );
-    } else if (dispatchResult.status === "FAILED") {
-      console.error(
-        `[ResearchSubWorkflow] Research dispatch failed: ${dispatchResult.error}`,
-      );
-      break; // Fall through to plan with triage context only
-    } else {
-      // STARTED — hibernate and wait for scraper callback or timeout
-      // Workflow thread shuts down here (0 CPU)
-      const scrapeEvent = ctx.waitForExternalEvent("ScrapeCompleted");
-      const timeoutTimer = ctx.createTimer(RESEARCH_TIMEOUT_MS);
-
-      const raceResult: unknown = yield Promise.race([scrapeEvent, timeoutTimer]);
-
-      // Check if we got a timeout (timer resolves to undefined)
-      if (raceResult === undefined || raceResult === null) {
-        console.warn(
-          `[ResearchSubWorkflow] Scraper timed out after ${RESEARCH_TIMEOUT_MS / 1000}s for task ${taskId}`,
-        );
-        yield ctx.callActivity(sendPushNotificationActivity, {
-          message: `Scraper timed out on task ${taskId} (issue #${issueNumber}: ${issueTitle})`,
-          title: "Research Timeout",
-          priority: "high" as const,
-          tags: ["warning", "research"],
-        } satisfies SendPushNotificationInput);
-        timedOut = true;
-        break; // Fall through to plan with triage context only
-      }
-
-      // raceResult is the MinIO key from the ScrapeCompleted event
-      scrapeResultKey = typeof raceResult === "string" ? raceResult : null;
-      console.log(
-        `[ResearchSubWorkflow] Scrape completed for task ${taskId}, raw key: ${scrapeResultKey}`,
-      );
+    // Handle dispatch failure (Gemini-4: dispatch failure should not be immediately terminal)
+    if (dispatchResult.status === "FAILED") {
+      console.warn(`[ResearchSubWorkflow] Scraper dispatch failed for ${taskId}`);
+      yield ctx.callActivity(sendPushNotificationActivity, {
+        message: `Scraper dispatch failed for task ${taskId} (issue #${issueNumber}). Cycle ${totalResearchCycles}/${MAX_RESEARCH_CYCLES}.`,
+        title: `mesh-six: Scraper dispatch failed`,
+        priority: "high",
+      } satisfies SendPushNotificationInput);
+      failureReason = "scraper dispatch failed";
+      break;
     }
 
-    // --- Review & Format ---
-    const rawMinioId =
-      dispatchResult.status === "COMPLETED"
-        ? dispatchResult.statusDocKey.replace("status.json", "raw-scraper-result.md")
-        : (scrapeResultKey ?? `research/raw/${taskId}/raw-scraper-result.md`);
+    // Handle already-completed (idempotent path) — use explicit rawMinioKey (fixes GPT-H2)
+    if (dispatchResult.status === "COMPLETED" && dispatchResult.rawMinioKey) {
+      // Skip hibernation, go straight to review with the explicit key
+      const reviewResult: ReviewResearchOutput = yield ctx.callActivity(
+        reviewResearchActivity,
+        {
+          taskId,
+          rawMinioKey: dispatchResult.rawMinioKey,
+          originalPrompt: currentPrompt,
+          sessionId,
+        } satisfies ReviewResearchInput,
+      );
+
+      if (reviewResult.status === "APPROVED" && reviewResult.cleanMinioKey) {
+        finalResearchDocId = reviewResult.cleanMinioKey;
+        isResearchComplete = true;
+      } else if (reviewResult.status === "INCOMPLETE") {
+        currentPrompt = reviewResult.newFollowUpPrompt || currentPrompt;
+      }
+      continue;
+    }
+
+    // --- Hibernate: wait for external event OR timeout ---
+    //
+    // FIX C1: Do NOT use Promise.race with Dapr tasks — it breaks replay
+    // determinism. Instead, use the standalone `whenAny` combinator from
+    // @microsoft/durabletask-js. This is the SDK-blessed pattern for
+    // racing Dapr Task objects while preserving replay safety.
+    //
+    // FIX C2: Timeout detection compares the winning task reference against
+    // the timeoutTimer object — no ambiguous null/undefined checks.
+
+    const scrapeEvent = ctx.waitForExternalEvent(SCRAPE_COMPLETED_EVENT);
+    const timeoutTimer = ctx.createTimer(RESEARCH_TIMEOUT_MS);
+
+    // whenAny returns the first completed task — deterministic on replay
+    const winner: unknown = yield whenAny([scrapeEvent, timeoutTimer]);
+
+    // Compare winner against the timer task reference (C2 fix).
+    // If the timer won, it's a timeout. If the scrape event won,
+    // extract the payload from scrapeEvent.getResult().
+    const isTimeout = winner === timeoutTimer;
+
+    let scrapePayload: ScrapeCompletedPayload | null = null;
+    if (!isTimeout) {
+      // The scrape event won — extract its payload
+      const eventResult: unknown = scrapeEvent.getResult();
+      if (typeof eventResult === "object" && eventResult !== null && "minioKey" in eventResult) {
+        scrapePayload = eventResult as ScrapeCompletedPayload;
+      } else if (typeof eventResult === "string") {
+        // Handle legacy string payload format
+        scrapePayload = { minioKey: eventResult };
+      }
+    }
+
+    if (isTimeout || !scrapePayload) {
+      // Timeout path
+      timedOut = true;
+      console.warn(`[ResearchSubWorkflow] Scraper timed out for ${taskId}`);
+
+      yield ctx.callActivity(sendPushNotificationActivity, {
+        message: `Scraper timed out for task ${taskId} (issue #${issueNumber}) after ${RESEARCH_TIMEOUT_MS / 60_000}min. Cycle ${totalResearchCycles}/${MAX_RESEARCH_CYCLES}.`,
+        title: `mesh-six: Scraper timeout`,
+        priority: "high",
+      } satisfies SendPushNotificationInput);
+
+      // Update DB to TIMEOUT
+      if (sessionId) {
+        yield ctx.callActivity(updateResearchSessionActivity, {
+          sessionId,
+          status: "TIMEOUT",
+        } satisfies UpdateResearchSessionInput);
+      }
+
+      failureReason = `scraper timed out after ${RESEARCH_TIMEOUT_MS / 60_000} minutes`;
+      break;
+    }
+
+    // --- Phase 2: Review & Format ---
+    // Use the explicit minioKey from the scrape event (fixes GPT-H2)
+    const rawMinioKey = scrapePayload.minioKey || dispatchResult.rawMinioKey;
+    if (!rawMinioKey) {
+      console.error(`[ResearchSubWorkflow] No rawMinioKey available for ${taskId}`);
+      failureReason = "no raw MinIO key available from scraper";
+      break;
+    }
+
+    // Update DB with raw key (fixes H4)
+    if (sessionId) {
+      yield ctx.callActivity(updateResearchSessionActivity, {
+        sessionId,
+        status: "REVIEW",
+        rawMinioKey,
+      } satisfies UpdateResearchSessionInput);
+    }
 
     const reviewResult: ReviewResearchOutput = yield ctx.callActivity(
       reviewResearchActivity,
       {
         taskId,
-        rawMinioId,
-        originalPrompt: researchPrompt,
-        researchQuestions: triageResult.researchQuestions,
+        rawMinioKey,
+        originalPrompt: currentPrompt,
+        sessionId,
       } satisfies ReviewResearchInput,
     );
 
-    if (reviewResult.status === "APPROVED") {
-      finalResearchDocId = reviewResult.cleanMinioId ?? null;
+    if (reviewResult.status === "APPROVED" && reviewResult.cleanMinioKey) {
+      finalResearchDocId = reviewResult.cleanMinioKey;
       isResearchComplete = true;
+      console.log(`[ResearchSubWorkflow] Research approved for ${taskId}`);
+    } else if (reviewResult.status === "INCOMPLETE") {
+      currentPrompt = reviewResult.newFollowUpPrompt || currentPrompt;
       console.log(
-        `[ResearchSubWorkflow] Research approved for task ${taskId}, clean doc: ${finalResearchDocId}`,
-      );
-    } else {
-      // INCOMPLETE — loop back with updated questions
-      currentFollowUpPrompt = reviewResult.missingInformation;
-      console.log(
-        `[ResearchSubWorkflow] Research incomplete for task ${taskId}, missing: ${reviewResult.missingInformation}`,
+        `[ResearchSubWorkflow] Research incomplete for ${taskId}, looping with updated prompt`,
       );
     }
   }
 
-  if (!isResearchComplete && totalResearchCycles >= MAX_RESEARCH_CYCLES) {
-    console.warn(
-      `[ResearchSubWorkflow] Max research cycles (${MAX_RESEARCH_CYCLES}) reached for task ${taskId}`,
-    );
+  // Check if we exhausted cycles without completion
+  if (!isResearchComplete && !timedOut && !failureReason) {
+    failureReason = `exceeded ${MAX_RESEARCH_CYCLES} research cycles without approval`;
   }
 
   // =========================================================================
-  // Phase 3: Draft Final Plan
+  // Phase 3: Final Plan Drafting
   // =========================================================================
 
   console.log(
-    `[ResearchSubWorkflow] Drafting final plan for task ${taskId}`,
+    `[ResearchSubWorkflow] Drafting plan for ${taskId} (research: ${isResearchComplete ? "complete" : "incomplete"})`,
   );
 
-  const finalPlan: string = yield ctx.callActivity(
-    architectDraftPlanActivity,
-    {
-      taskId,
-      issueNumber,
-      repoOwner,
-      repoName,
-      issueTitle,
-      issueBody,
-      initialContext: triageResult.context,
-      deepResearchDocId: finalResearchDocId ?? undefined,
-      architectGuidance,
-    } satisfies DraftPlanInput,
-  );
+  const plan: string = yield ctx.callActivity(architectDraftPlanActivity, {
+    taskId,
+    issueNumber,
+    issueTitle,
+    repoOwner,
+    repoName,
+    initialContext: triageResult.context,
+    deepResearchDocId: finalResearchDocId,
+    researchFailed: !isResearchComplete,
+    failureReason,
+    sessionId,
+  } satisfies ArchitectDraftPlanInput);
 
-  console.log(
-    `[ResearchSubWorkflow] Plan drafted for task ${taskId} (${finalPlan.length} chars)`,
-  );
+  console.log(`[ResearchSubWorkflow] Plan drafted for ${taskId}`);
+
+  // =========================================================================
+  // Phase 4: Mem0 Reflection — extract durable memories (spec requirement)
+  // =========================================================================
+
+  yield ctx.callActivity(reflectAndStoreActivity, {
+    taskId,
+    issueTitle,
+    architectActorId,
+    triageContext: triageResult.context,
+    plan,
+    researchCompleted: isResearchComplete,
+    totalResearchCycles,
+  } satisfies ReflectAndStoreInput);
 
   return {
-    plan: finalPlan,
-    researchDocId: finalResearchDocId ?? undefined,
-    triageResult,
+    plan,
+    researchCompleted: isResearchComplete,
     totalResearchCycles,
     timedOut,
+    deepResearchDocId: finalResearchDocId,
   } satisfies ResearchAndPlanOutput;
 };
 
 // ---------------------------------------------------------------------------
-// Activity implementations interface
-// ---------------------------------------------------------------------------
-
-export interface ResearchActivityImplementations {
-  architectTriage: typeof architectTriageActivity;
-  startDeepResearch: typeof startDeepResearchActivity;
-  reviewResearch: typeof reviewResearchActivity;
-  architectDraftPlan: typeof architectDraftPlanActivity;
-  sendPushNotification: typeof sendPushNotificationActivity;
-}
-
-// ---------------------------------------------------------------------------
-// Registration helper
+// Registration helper — wires activity implementations into the sub-workflow
 // ---------------------------------------------------------------------------
 
 /**
- * Wire activity implementations and register the sub-workflow + activities
- * with the provided WorkflowRuntime.
+ * Register the research sub-workflow and its activities onto a WorkflowRuntime.
+ * Returns a fresh runtime reference for chaining.
  */
 export function registerResearchWorkflow(
   runtime: WorkflowRuntime,
   impls: ResearchActivityImplementations,
-): void {
-  // Wire implementations to module-level stubs
+): WorkflowRuntime {
+  // Wire implementations into module-level stubs
   architectTriageActivity = impls.architectTriage;
   startDeepResearchActivity = impls.startDeepResearch;
   reviewResearchActivity = impls.reviewResearch;
   architectDraftPlanActivity = impls.architectDraftPlan;
   sendPushNotificationActivity = impls.sendPushNotification;
+  updateResearchSessionActivity = impls.updateResearchSession;
+  reflectAndStoreActivity = impls.reflectAndStore;
+  researchActivitiesRegistered = true;
 
-  // Register the sub-workflow
+  // Register workflow
   runtime.registerWorkflow(researchAndPlanSubWorkflow);
 
-  // Register all research activities
+  // Register activities
   runtime.registerActivity(architectTriageActivity);
   runtime.registerActivity(startDeepResearchActivity);
   runtime.registerActivity(reviewResearchActivity);
   runtime.registerActivity(architectDraftPlanActivity);
   runtime.registerActivity(sendPushNotificationActivity);
+  runtime.registerActivity(updateResearchSessionActivity);
+  runtime.registerActivity(reflectAndStoreActivity);
+
+  return runtime;
 }

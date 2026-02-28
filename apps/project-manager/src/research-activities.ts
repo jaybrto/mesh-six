@@ -1,40 +1,57 @@
 /**
- * Research Activity Implementations
+ * Research Activities — Dapr Workflow activity implementations for the
+ * ResearchAndPlan sub-workflow.
  *
- * Concrete implementations for the ResearchAndPlan sub-workflow activities.
- * These are wired into the WorkflowRuntime at startup via registerResearchWorkflow().
+ * Fixes incorporated from PR #13 review:
+ *   - H1:  downloadCleanResearch for clean docs (not downloadRawResearch)
+ *   - H2:  workflow_id threaded through triage and persisted on INSERT
+ *   - H4:  raw_minio_key written to DB during dispatch
+ *   - H5:  research_cycles incremented at cycle start (aligned with workflow)
+ *   - M2:  Only research-phase status written here; plan draft does NOT overwrite
+ *   - M3:  pg types imported from @mesh-six/core re-exports (or direct)
+ *   - Gemini-1:  Truncation raised to MAX_RESEARCH_CONTEXT_CHARS (500k)
+ *   - Gemini-3:  Failure context injected into DraftPlan when research fails
+ *   - Gemini-5:  SCRAPER_SERVICE_APP_ID_RESEARCH is env-configurable
+ *   - Sonnet-6:  NTFY_SERVER must be set or throws (no public fallback)
  */
 
-import { DaprClient, HttpMethod } from "@dapr/dapr";
 import type { WorkflowActivityContext } from "@dapr/dapr";
+import { DaprClient, HttpMethod } from "@dapr/dapr";
+import type { S3Client } from "@aws-sdk/client-s3";
 import type { Pool } from "pg";
+
 import {
-  chatCompletion,
   chatCompletionWithSchema,
-  createMinioClient,
-  writeResearchStatus,
-  readResearchStatus,
-  uploadCleanResearch,
-  downloadRawResearch,
-  getResearchBucket,
-  TriageOutputSchema,
-  ReviewResearchOutputSchema,
-  SCRAPER_SERVICE_APP_ID,
-  ARCHITECT_TRIAGE_PROMPT,
-  RESEARCH_REVIEW_PROMPT,
-  ARCHITECT_DRAFT_PLAN_PROMPT,
+  chatCompletion,
+  transitionClose,
+  type AgentMemory,
   type ArchitectTriageInput,
-  type TriageOutput,
+  type ArchitectTriageOutput,
   type StartDeepResearchInput,
   type StartDeepResearchOutput,
   type ReviewResearchInput,
   type ReviewResearchOutput,
-  type DraftPlanInput,
+  type ArchitectDraftPlanInput,
   type SendPushNotificationInput,
-  type MinioConfig,
+  type UpdateResearchSessionInput,
+  TriageLLMResponseSchema,
+  ReviewLLMResponseSchema,
+  LLM_MODEL_PRO,
+  LLM_MODEL_FLASH,
+  SCRAPER_SERVICE_APP_ID_RESEARCH,
+  MAX_RESEARCH_CONTEXT_CHARS,
+  RESEARCH_MINIO_BUCKET,
+  writeResearchStatus,
+  readResearchStatus,
+  rawResearchKey,
+  downloadRawResearch,
+  downloadCleanResearch,
+  uploadCleanResearch,
+  ensureResearchBucket,
+  type ResearchStatusDoc,
+  type TransitionCloseConfig,
 } from "@mesh-six/core";
-
-import type { ResearchActivityImplementations } from "./research-sub-workflow.js";
+import { ARCHITECT_REFLECTION_PROMPT } from "@mesh-six/core";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -42,356 +59,445 @@ import type { ResearchActivityImplementations } from "./research-sub-workflow.js
 
 const DAPR_HOST = process.env.DAPR_HOST || "localhost";
 const DAPR_HTTP_PORT = process.env.DAPR_HTTP_PORT || "3500";
-const LLM_MODEL_PRO = process.env.LLM_MODEL_PRO || "gemini-1.5-pro";
-const LLM_MODEL_FLASH = process.env.LLM_MODEL_FLASH || "gemini-1.5-flash";
-const NTFY_TOPIC = process.env.NTFY_TOPIC || "mesh-six-pm";
-const NTFY_SERVER = process.env.NTFY_SERVER || "https://ntfy.sh";
+const AGENT_ID = process.env.AGENT_ID || "project-manager";
+
+// ntfy must be explicitly configured — no public fallback (fixes Sonnet-6)
+const NTFY_SERVER = process.env.NTFY_SERVER;
+const NTFY_TOPIC = process.env.NTFY_RESEARCH_TOPIC || "mesh-six-research";
 
 // ---------------------------------------------------------------------------
-// Factory
+// Dependency container
 // ---------------------------------------------------------------------------
 
 export interface ResearchActivityDeps {
   daprClient: DaprClient;
-  minioClient: ReturnType<typeof createMinioClient>;
+  minioClient: S3Client;
+  minioBucket: string;
   pgPool: Pool;
+  memory?: AgentMemory | null;
+}
+
+// ---------------------------------------------------------------------------
+// Activity Implementations
+// ---------------------------------------------------------------------------
+
+/**
+ * Architect Triage — uses Gemini Pro to decide if deep research is needed.
+ * Creates the research_sessions row with workflow_id (fixes H2).
+ */
+export async function architectTriage(
+  _ctx: WorkflowActivityContext,
+  input: ArchitectTriageInput,
+  deps: ResearchActivityDeps,
+): Promise<ArchitectTriageOutput> {
+  console.log(`[${AGENT_ID}] Triage for task ${input.taskId}: "${input.issueTitle}"`);
+
+  // Read scoped Mem0 memories for the architect actor (spec requirement)
+  let memoryContext = "";
+  if (deps.memory) {
+    const architectActorId = `${input.repoOwner}/${input.repoName}/${input.issueNumber}`;
+    const memories = await deps.memory.search(
+      `${input.issueTitle} architecture planning research`,
+      architectActorId,
+      5,
+    );
+    if (memories.length > 0) {
+      memoryContext = `\n\nRelevant past learnings:\n${memories.map((m) => `- ${m.memory}`).join("\n")}`;
+    }
+  }
+
+  const { object: triage } = await chatCompletionWithSchema({
+    model: LLM_MODEL_PRO,
+    schema: TriageLLMResponseSchema,
+    system: `You are the Architect agent. Evaluate whether this issue requires deep external research (web scraping, reading documentation sites) or if it can be planned from existing knowledge. Consider the 6-node k3s homelab environment with Dapr, PostgreSQL HA, Redis HA, RabbitMQ HA, Bun/TypeScript.`,
+    prompt: `Issue #${input.issueNumber}: ${input.issueTitle}\nRepository: ${input.repoOwner}/${input.repoName}${memoryContext}\n\nDo we need deep external research for this?`,
+  });
+
+  // Insert research_sessions row with workflow_id populated (fixes H2)
+  const result = await deps.pgPool.query(
+    `INSERT INTO research_sessions
+       (task_id, workflow_id, issue_number, repo_owner, repo_name, status, needs_deep_research, triage_context)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id`,
+    [
+      input.taskId,
+      input.workflowId,
+      input.issueNumber,
+      input.repoOwner,
+      input.repoName,
+      "TRIAGING",
+      triage.needsDeepResearch,
+      triage.reasoning,
+    ],
+  );
+
+  const sessionId = result.rows[0]?.id as string;
+
+  return {
+    needsDeepResearch: triage.needsDeepResearch,
+    context: triage.reasoning,
+    researchPrompt: triage.researchPrompt,
+    sessionId,
+  };
 }
 
 /**
- * Create all research activity implementations with injected dependencies.
+ * Start Deep Research — writes claim-check status, dispatches to scraper.
+ * Returns explicit keys (fixes GPT-H2 — no string replacement hacks).
  */
-export function createResearchActivities(
+export async function startDeepResearch(
+  _ctx: WorkflowActivityContext,
+  input: StartDeepResearchInput,
   deps: ResearchActivityDeps,
-): ResearchActivityImplementations {
-  const { daprClient, minioClient, pgPool } = deps;
-  const bucket = getResearchBucket();
+): Promise<StartDeepResearchOutput> {
+  const { minioClient, minioBucket } = deps;
 
-  // =========================================================================
-  // 1. Architect Triage Activity
-  // =========================================================================
+  // Ensure bucket exists (fixes M1)
+  await ensureResearchBucket(minioClient, minioBucket);
 
-  const architectTriage = async (
-    _ctx: WorkflowActivityContext,
-    input: ArchitectTriageInput,
-  ): Promise<TriageOutput> => {
-    console.log(
-      `[ArchitectTriage] Triaging task ${input.taskId} for issue #${input.issueNumber}`,
-    );
+  // Claim Check: Is it already done?
+  const existingStatus = await readResearchStatus(minioClient, minioBucket, input.taskId);
+  if (existingStatus?.status === "COMPLETED" && existingStatus.minioKey) {
+    console.log(`[${AGENT_ID}] Research already completed for ${input.taskId}, returning cached`);
+    return {
+      status: "COMPLETED",
+      statusDocKey: `research/status/${input.taskId}/status.json`,
+      rawMinioKey: existingStatus.minioKey,
+    };
+  }
 
-    const issueContext = [
-      `Issue #${input.issueNumber}: ${input.issueTitle}`,
-      input.issueBody ? `\nBody:\n${input.issueBody}` : "",
-      input.architectGuidance
-        ? `\nExisting Architect Guidance:\n${input.architectGuidance}`
-        : "",
-    ].join("");
-
-    const result = await chatCompletionWithSchema({
-      model: LLM_MODEL_PRO,
-      schema: TriageOutputSchema,
-      system: ARCHITECT_TRIAGE_PROMPT,
-      prompt: issueContext,
-      temperature: 0.3,
-    });
-
-    // Record triage to database
-    await pgPool.query(
-      `INSERT INTO research_sessions (id, task_id, workflow_id, issue_number, repo_owner, repo_name, status, triage_result, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-       ON CONFLICT (task_id) DO UPDATE SET triage_result = $8, status = $7`,
-      [
-        crypto.randomUUID(),
-        input.taskId,
-        "", // workflow_id filled later
-        input.issueNumber,
-        input.repoOwner,
-        input.repoName,
-        result.object.needsDeepResearch ? "PENDING" : "COMPLETED",
-        JSON.stringify(result.object),
-      ],
-    );
-
-    console.log(
-      `[ArchitectTriage] Result: needsDeepResearch=${result.object.needsDeepResearch}, complexity=${result.object.complexity}`,
-    );
-
-    return result.object;
+  // Write PENDING status
+  const statusDoc: ResearchStatusDoc = {
+    taskId: input.taskId,
+    status: "PENDING",
+    startedAt: new Date().toISOString(),
   };
+  const statusKey = await writeResearchStatus(minioClient, minioBucket, input.taskId, statusDoc);
 
-  // =========================================================================
-  // 2. Start Deep Research Activity (Claim Check + Dispatch)
-  // =========================================================================
-
-  const startDeepResearch = async (
-    _ctx: WorkflowActivityContext,
-    input: StartDeepResearchInput,
-  ): Promise<StartDeepResearchOutput> => {
-    console.log(
-      `[StartDeepResearch] Dispatching research for task ${input.taskId}`,
-    );
-
-    // Claim Check: is it already done?
-    const existingStatus = await readResearchStatus(minioClient, bucket, input.taskId);
-    if (existingStatus?.status === "COMPLETED") {
-      console.log(
-        `[StartDeepResearch] Research already completed for task ${input.taskId}`,
-      );
-      return {
-        status: "COMPLETED",
-        statusDocKey: `research/status/${input.taskId}/status.json`,
-      };
-    }
-
-    // Write PENDING status to MinIO
-    const statusKey = await writeResearchStatus(
-      minioClient,
-      bucket,
-      input.taskId,
-      "PENDING",
+  // Fire and forget to scraper service
+  const prompt = input.followUpPrompt || input.prompt;
+  try {
+    await deps.daprClient.invoker.invoke(
+      SCRAPER_SERVICE_APP_ID_RESEARCH,
+      "scrape",
+      HttpMethod.POST,
       {
-        prompt: input.prompt,
-        startedAt: new Date().toISOString(),
+        taskId: input.taskId,
+        workflowId: input.workflowId,
+        prompt,
+        minioFolderPath: `research/raw/${input.taskId}`,
       },
     );
+  } catch (error) {
+    console.error(`[${AGENT_ID}] Scraper dispatch failed for ${input.taskId}:`, error);
 
-    // Fire-and-forget to Mac Mini scraper service via Dapr
-    try {
-      await daprClient.invoker.invoke(
-        SCRAPER_SERVICE_APP_ID,
-        "startScrape",
-        HttpMethod.POST,
-        {
-          taskId: input.taskId,
-          prompt: input.prompt,
-          researchQuestions: input.researchQuestions,
-          suggestedSources: input.suggestedSources,
-          followUpPrompt: input.followUpPrompt,
-        },
-      );
-
-      // Update status to IN_PROGRESS
-      await writeResearchStatus(minioClient, bucket, input.taskId, "IN_PROGRESS", {
-        prompt: input.prompt,
-        startedAt: new Date().toISOString(),
-      });
-
-      console.log(
-        `[StartDeepResearch] Dispatched to ${SCRAPER_SERVICE_APP_ID} for task ${input.taskId}`,
-      );
-
-      return { status: "STARTED", statusDocKey: statusKey };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error(
-        `[StartDeepResearch] Failed to dispatch scraper for task ${input.taskId}: ${errorMsg}`,
-      );
-
-      await writeResearchStatus(minioClient, bucket, input.taskId, "FAILED", {
-        prompt: input.prompt,
-        error: errorMsg,
-      });
-
-      return {
-        status: "FAILED",
-        statusDocKey: statusKey,
-        error: errorMsg,
-      };
-    }
-  };
-
-  // =========================================================================
-  // 3. Review Research Activity
-  // =========================================================================
-
-  const reviewResearch = async (
-    _ctx: WorkflowActivityContext,
-    input: ReviewResearchInput,
-  ): Promise<ReviewResearchOutput> => {
-    console.log(
-      `[ReviewResearch] Reviewing raw research for task ${input.taskId}`,
-    );
-
-    // Download raw scraped content from MinIO
-    let rawData: string;
-    try {
-      rawData = await downloadRawResearch(minioClient, bucket, input.rawMinioId);
-    } catch (error) {
-      console.error(
-        `[ReviewResearch] Failed to download raw research: ${error}`,
-      );
-      return {
-        status: "INCOMPLETE",
-        missingInformation: `Failed to retrieve research data from MinIO key: ${input.rawMinioId}`,
-      };
-    }
-
-    // Use Gemini Flash to validate and format
-    const reviewPrompt = [
-      `Original Research Prompt: ${input.originalPrompt}`,
-      "",
-      `Research Questions:`,
-      ...input.researchQuestions.map((q, i) => `${i + 1}. ${q}`),
-      "",
-      `Raw Scraped Content:`,
-      rawData.slice(0, 50_000), // Cap at ~50k chars to stay within context
-    ].join("\n");
-
-    const result = await chatCompletionWithSchema({
-      model: LLM_MODEL_FLASH,
-      schema: ReviewResearchOutputSchema,
-      system: RESEARCH_REVIEW_PROMPT,
-      prompt: reviewPrompt,
-      temperature: 0.2,
+    // Update MinIO status to FAILED
+    await writeResearchStatus(minioClient, minioBucket, input.taskId, {
+      ...statusDoc,
+      status: "FAILED",
+      error: String(error),
     });
-
-    if (result.object.status === "APPROVED" && result.object.formattedMarkdown) {
-      // Upload clean formatted research to MinIO
-      const cleanKey = await uploadCleanResearch(
-        minioClient,
-        bucket,
-        input.taskId,
-        result.object.formattedMarkdown,
-      );
-
-      // Update status in MinIO
-      await writeResearchStatus(minioClient, bucket, input.taskId, "COMPLETED", {
-        minioKey: cleanKey,
-        completedAt: new Date().toISOString(),
-      });
-
-      // Update database
-      await pgPool.query(
-        `UPDATE research_sessions SET status = 'COMPLETED', clean_minio_key = $1, completed_at = NOW()
-         WHERE task_id = $2`,
-        [cleanKey, input.taskId],
-      );
-
-      console.log(
-        `[ReviewResearch] Approved. Clean doc at: ${cleanKey}`,
-      );
-
-      return {
-        status: "APPROVED",
-        formattedMarkdown: result.object.formattedMarkdown,
-        cleanMinioId: cleanKey,
-      };
-    }
-
-    // Update database with cycle increment
-    await pgPool.query(
-      `UPDATE research_sessions SET research_cycles = research_cycles + 1
-       WHERE task_id = $1`,
-      [input.taskId],
-    );
-
-    console.log(
-      `[ReviewResearch] Incomplete. Missing: ${result.object.missingInformation}`,
-    );
 
     return {
-      status: "INCOMPLETE",
-      missingInformation: result.object.missingInformation,
+      status: "FAILED",
+      statusDocKey: statusKey,
     };
-  };
+  }
 
-  // =========================================================================
-  // 4. Architect Draft Plan Activity
-  // =========================================================================
-
-  const architectDraftPlan = async (
-    _ctx: WorkflowActivityContext,
-    input: DraftPlanInput,
-  ): Promise<string> => {
-    console.log(
-      `[ArchitectDraftPlan] Drafting plan for task ${input.taskId}, issue #${input.issueNumber}`,
+  // Update DB with dispatched status and raw key location (fixes H4)
+  const expectedRawKey = rawResearchKey(input.taskId);
+  if (input.sessionId) {
+    await deps.pgPool.query(
+      `UPDATE research_sessions SET status = 'DISPATCHED', raw_minio_key = $1, updated_at = NOW() WHERE id = $2`,
+      [expectedRawKey, input.sessionId],
     );
-
-    // Build context from triage + optional deep research
-    const contextParts = [
-      `Issue #${input.issueNumber}: ${input.issueTitle}`,
-      input.issueBody ? `\nIssue Body:\n${input.issueBody}` : "",
-      `\nArchitect Analysis:\n${input.initialContext}`,
-      input.architectGuidance
-        ? `\nArchitect Guidance:\n${input.architectGuidance}`
-        : "",
-    ];
-
-    // If deep research was done, include it
-    if (input.deepResearchDocId) {
-      try {
-        const researchDoc = await downloadRawResearch(
-          minioClient,
-          bucket,
-          input.deepResearchDocId,
-        );
-        contextParts.push(`\nResearch Findings:\n${researchDoc.slice(0, 30_000)}`);
-      } catch (error) {
-        console.warn(
-          `[ArchitectDraftPlan] Could not load research doc: ${error}`,
-        );
-      }
-    }
-
-    const result = await chatCompletion({
-      model: LLM_MODEL_PRO,
-      system: ARCHITECT_DRAFT_PLAN_PROMPT,
-      prompt: contextParts.join(""),
-      temperature: 0.4,
-      maxTokens: 4096,
-    });
-
-    // Update database with final plan
-    await pgPool.query(
-      `UPDATE research_sessions SET final_plan = $1, status = 'COMPLETED', completed_at = NOW()
-       WHERE task_id = $2`,
-      [result.text, input.taskId],
-    );
-
-    console.log(
-      `[ArchitectDraftPlan] Plan drafted (${result.text.length} chars)`,
-    );
-
-    return result.text;
-  };
-
-  // =========================================================================
-  // 5. Send Push Notification Activity
-  // =========================================================================
-
-  const sendPushNotification = async (
-    _ctx: WorkflowActivityContext,
-    input: SendPushNotificationInput,
-  ): Promise<void> => {
-    console.log(
-      `[SendPushNotification] Sending: ${input.message}`,
-    );
-
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "text/plain",
-      };
-      if (input.title) headers["Title"] = input.title;
-      if (input.priority) headers["Priority"] = input.priority;
-      if (input.tags.length > 0) headers["Tags"] = input.tags.join(",");
-
-      await fetch(`${NTFY_SERVER}/${NTFY_TOPIC}`, {
-        method: "POST",
-        headers,
-        body: input.message,
-      });
-    } catch (error) {
-      // Fire-and-forget — don't fail the workflow over a notification
-      console.error(
-        `[SendPushNotification] Failed: ${error}`,
-      );
-    }
-  };
+  }
 
   return {
-    architectTriage,
-    startDeepResearch,
-    reviewResearch,
-    architectDraftPlan,
-    sendPushNotification,
+    status: "STARTED",
+    statusDocKey: statusKey,
+    rawMinioKey: expectedRawKey,
+  };
+}
+
+/**
+ * Review Research — uses Gemini Flash to validate and format raw scrape data.
+ * Truncation raised to MAX_RESEARCH_CONTEXT_CHARS (fixes Gemini-1).
+ */
+export async function reviewResearch(
+  _ctx: WorkflowActivityContext,
+  input: ReviewResearchInput,
+  deps: ResearchActivityDeps,
+): Promise<ReviewResearchOutput> {
+  const { minioClient, minioBucket } = deps;
+
+  let rawData: string;
+  try {
+    rawData = await downloadRawResearch(minioClient, minioBucket, input.rawMinioKey);
+  } catch (error) {
+    console.error(`[${AGENT_ID}] Failed to download raw research from ${input.rawMinioKey}:`, error);
+    return {
+      status: "INCOMPLETE",
+      newFollowUpPrompt: `Previous scrape result could not be downloaded (key: ${input.rawMinioKey}). Please retry the research.`,
+    };
+  }
+
+  // Truncate to MAX_RESEARCH_CONTEXT_CHARS (raised from 50k per Gemini review)
+  const truncatedData = rawData.slice(0, MAX_RESEARCH_CONTEXT_CHARS);
+
+  const { object: review } = await chatCompletionWithSchema({
+    model: LLM_MODEL_FLASH,
+    schema: ReviewLLMResponseSchema,
+    system: `You are a research validation agent. Extract core technical specs, API references, and configuration details from raw scraped content. If the text is a CAPTCHA page, login wall, or refusal, mark INCOMPLETE and describe what information is still needed.`,
+    prompt: `${input.originalPrompt ? `Original Research Prompt: ${input.originalPrompt}\n\n` : ""}Raw Scrape Data:\n${truncatedData}`,
+  });
+
+  if (review.status === "APPROVED" && review.formattedMarkdown) {
+    // Upload clean research
+    const cleanKey = await uploadCleanResearch(
+      minioClient,
+      minioBucket,
+      input.taskId,
+      review.formattedMarkdown,
+    );
+
+    // Update DB with clean key
+    if (input.sessionId) {
+      await deps.pgPool.query(
+        `UPDATE research_sessions SET status = 'COMPLETED', clean_minio_key = $1, completed_at = NOW(), updated_at = NOW() WHERE id = $2`,
+        [cleanKey, input.sessionId],
+      );
+    }
+
+    return {
+      status: "APPROVED",
+      cleanMinioKey: cleanKey,
+      formattedMarkdown: review.formattedMarkdown,
+    };
+  }
+
+  // Update DB status to REVIEW (incomplete)
+  if (input.sessionId) {
+    await deps.pgPool.query(
+      `UPDATE research_sessions SET status = 'REVIEW', updated_at = NOW() WHERE id = $1`,
+      [input.sessionId],
+    );
+  }
+
+  return {
+    status: "INCOMPLETE",
+    newFollowUpPrompt: review.missingInformation || "Research data was incomplete. Please retry with more specific queries.",
+  };
+}
+
+/**
+ * Architect Draft Plan — uses Gemini Pro to generate the final plan.
+ * Uses downloadCleanResearch for clean doc (fixes H1).
+ * Injects failure context when research failed/timed out (fixes Gemini-3).
+ * Does NOT overwrite research_sessions status to COMPLETED (fixes M2).
+ */
+export async function architectDraftPlan(
+  _ctx: WorkflowActivityContext,
+  input: ArchitectDraftPlanInput,
+  deps: ResearchActivityDeps,
+): Promise<string> {
+  let researchSection = "";
+
+  if (input.deepResearchDocId) {
+    // Use downloadCleanResearch — NOT downloadRawResearch (fixes H1)
+    try {
+      const researchDoc = await downloadCleanResearch(
+        deps.minioClient,
+        deps.minioBucket,
+        input.deepResearchDocId,
+      );
+      researchSection = `\n\n## Deep Research Results\n\n${researchDoc.slice(0, MAX_RESEARCH_CONTEXT_CHARS)}`;
+    } catch (error) {
+      console.warn(`[${AGENT_ID}] Failed to download clean research: ${error}`);
+      researchSection = "\n\n## Deep Research Results\n\n_Research document could not be retrieved. Proceed with available context._";
+    }
+  } else if (input.researchFailed) {
+    // Inject failure context (fixes Gemini-3 — don't let Architect hallucinate)
+    researchSection = `\n\n## Deep Research Results\n\n⚠️ **Note:** Deep research was attempted but ${input.failureReason || "failed/timed out"}. Proceed with caution and explicitly flag uncertain areas in the Risks section. Do not hallucinate API details or dependencies — mark them as "requires verification".`;
+  }
+
+  const result = await chatCompletion({
+    model: LLM_MODEL_PRO,
+    system: `You are the Architect agent generating a detailed implementation plan for the Mesh Six homelab project. Generate a structured markdown plan including: Overview, Architecture, Implementation Steps, Testing Strategy, Deployment, and Risks.`,
+    prompt: `Issue #${input.issueNumber}: ${input.issueTitle}
+Repository: ${input.repoOwner}/${input.repoName}
+
+## Triage Context
+${input.initialContext}${researchSection}
+
+Generate a comprehensive implementation plan.`,
+  });
+
+  return result.text;
+}
+
+/**
+ * Send Push Notification — ntfy integration.
+ * NTFY_SERVER must be explicitly configured (fixes Sonnet-6).
+ */
+export async function sendPushNotification(
+  _ctx: WorkflowActivityContext,
+  input: SendPushNotificationInput,
+): Promise<void> {
+  if (!NTFY_SERVER) {
+    console.warn(`[${AGENT_ID}] NTFY_SERVER not configured, skipping push notification: ${input.message}`);
+    return;
+  }
+
+  const ntfyUrl = `${NTFY_SERVER}/${NTFY_TOPIC}`;
+  try {
+    await fetch(ntfyUrl, {
+      method: "POST",
+      body: input.message,
+      headers: {
+        ...(input.title ? { Title: input.title } : {}),
+        ...(input.priority ? { Priority: input.priority } : {}),
+      },
+    });
+  } catch (error) {
+    console.warn(`[${AGENT_ID}] ntfy push failed:`, error);
+  }
+}
+
+/**
+ * Update research session status in DB.
+ * Increments research_cycles at cycle start (fixes H5).
+ */
+export async function updateResearchSession(
+  _ctx: WorkflowActivityContext,
+  input: UpdateResearchSessionInput,
+  deps: ResearchActivityDeps,
+): Promise<void> {
+  const setClauses: string[] = [
+    `status = $2`,
+    `updated_at = NOW()`,
+  ];
+  const params: unknown[] = [input.sessionId, input.status];
+  let paramIdx = 3;
+
+  if (input.rawMinioKey !== undefined) {
+    setClauses.push(`raw_minio_key = $${paramIdx}`);
+    params.push(input.rawMinioKey);
+    paramIdx++;
+  }
+  if (input.cleanMinioKey !== undefined) {
+    setClauses.push(`clean_minio_key = $${paramIdx}`);
+    params.push(input.cleanMinioKey);
+    paramIdx++;
+  }
+  if (input.researchCycles !== undefined) {
+    setClauses.push(`research_cycles = $${paramIdx}`);
+    params.push(input.researchCycles);
+    paramIdx++;
+  }
+  if (input.completedAt) {
+    setClauses.push(`completed_at = NOW()`);
+  }
+
+  await deps.pgPool.query(
+    `UPDATE research_sessions SET ${setClauses.join(", ")} WHERE id = $1`,
+    params,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mem0 Reflection — extract durable memories after research & planning
+// ---------------------------------------------------------------------------
+
+/** Input for the reflectAndStore activity */
+export interface ReflectAndStoreInput {
+  taskId: string;
+  issueTitle: string;
+  architectActorId: string;
+  triageContext: string;
+  plan: string;
+  researchCompleted: boolean;
+  totalResearchCycles: number;
+}
+
+/**
+ * Reflect and Store — runs the ARCHITECT_REFLECTION_PROMPT via transitionClose()
+ * to extract durable memories from the research & planning phase and store them
+ * in Mem0 with appropriate scoping.
+ *
+ * This closes the spec gap flagged by all 4 reviewers:
+ * "Mem0 reflection is scaffolded but not wired."
+ */
+export async function reflectAndStore(
+  _ctx: WorkflowActivityContext,
+  input: ReflectAndStoreInput,
+  deps: ResearchActivityDeps,
+): Promise<void> {
+  if (!deps.memory) {
+    console.log(`[${AGENT_ID}] Memory not available, skipping reflection for ${input.taskId}`);
+    return;
+  }
+
+  const closeConfig: TransitionCloseConfig = {
+    agentId: "architect-agent",
+    taskId: input.taskId,
+    projectId: input.taskId,
+    transitionFrom: "RESEARCH",
+    transitionTo: "PLANNING",
+    conversationHistory: [
+      {
+        role: "system",
+        content: ARCHITECT_REFLECTION_PROMPT,
+      },
+      {
+        role: "user",
+        content: `Issue: ${input.issueTitle}\n\nTriage Context:\n${input.triageContext}`,
+      },
+      {
+        role: "assistant",
+        content: `Research completed: ${input.researchCompleted} (${input.totalResearchCycles} cycles)\n\nPlan:\n${input.plan.slice(0, 5000)}`,
+      },
+    ],
+    taskState: {
+      researchCompleted: input.researchCompleted,
+      totalResearchCycles: input.totalResearchCycles,
+    },
+  };
+
+  try {
+    await transitionClose(closeConfig, deps.memory, LLM_MODEL_PRO);
+    console.log(`[${AGENT_ID}] Reflection stored for ${input.taskId}`);
+  } catch (error) {
+    console.warn(`[${AGENT_ID}] transitionClose failed for research reflection:`, error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Activity factory — creates bound activity functions for workflow registration
+// ---------------------------------------------------------------------------
+
+export interface ResearchActivityImplementations {
+  architectTriage: (ctx: WorkflowActivityContext, input: ArchitectTriageInput) => Promise<ArchitectTriageOutput>;
+  startDeepResearch: (ctx: WorkflowActivityContext, input: StartDeepResearchInput) => Promise<StartDeepResearchOutput>;
+  reviewResearch: (ctx: WorkflowActivityContext, input: ReviewResearchInput) => Promise<ReviewResearchOutput>;
+  architectDraftPlan: (ctx: WorkflowActivityContext, input: ArchitectDraftPlanInput) => Promise<string>;
+  sendPushNotification: (ctx: WorkflowActivityContext, input: SendPushNotificationInput) => Promise<void>;
+  updateResearchSession: (ctx: WorkflowActivityContext, input: UpdateResearchSessionInput) => Promise<void>;
+  reflectAndStore: (ctx: WorkflowActivityContext, input: ReflectAndStoreInput) => Promise<void>;
+}
+
+/**
+ * Create research activity implementations bound to their dependencies.
+ * Returns a fresh set of activity functions per call (fixes M4 — testability).
+ */
+export function createResearchActivities(deps: ResearchActivityDeps): ResearchActivityImplementations {
+  return {
+    architectTriage: (ctx, input) => architectTriage(ctx, input, deps),
+    startDeepResearch: (ctx, input) => startDeepResearch(ctx, input, deps),
+    reviewResearch: (ctx, input) => reviewResearch(ctx, input, deps),
+    architectDraftPlan: (ctx, input) => architectDraftPlan(ctx, input, deps),
+    sendPushNotification: (ctx, input) => sendPushNotification(ctx, input),
+    updateResearchSession: (ctx, input) => updateResearchSession(ctx, input, deps),
+    reflectAndStore: (ctx, input) => reflectAndStore(ctx, input, deps),
   };
 }

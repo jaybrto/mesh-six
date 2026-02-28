@@ -255,66 +255,94 @@ export {
   type MinioConfig,
 } from "./minio.js";
 
-// Research sub-workflow types
+// Mac Mini Scraper Service
 export {
-  ResearchStatusSchema,
-  ResearchStatusDocSchema,
-  TriageOutputSchema,
+  ScrapeProviderSchema,
+  ScrapeStatusSchema,
+  ScrapeDispatchPayloadSchema,
+  ScrapeStatusFileSchema,
+  ScrapeAckResponseSchema,
+  SCRAPER_SERVICE_APP_ID,
+  SCRAPER_MINIO_BUCKET,
+  SCRAPER_MINIO_PREFIX,
+  type ScrapeProvider,
+  type ScrapeStatus,
+  type ScrapeDispatchPayload,
+  type ScrapeStatusFile,
+  type ScrapeAckResponse,
+} from "./scraper-types.js";
+
+// OpenTelemetry initialization
+export { initTelemetry, type TelemetryConfig } from "./telemetry.js";
+
+// Research Sub-Workflow types
+export {
+  ResearchSessionStatusSchema,
+  ReviewVerdictSchema,
   ResearchAndPlanInputSchema,
   ResearchAndPlanOutputSchema,
-  ReviewResearchOutputSchema,
+  ArchitectTriageInputSchema,
+  ArchitectTriageOutputSchema,
   StartDeepResearchInputSchema,
   StartDeepResearchOutputSchema,
   ReviewResearchInputSchema,
-  DraftPlanInputSchema,
-  ArchitectTriageInputSchema,
+  ReviewResearchOutputSchema,
+  ArchitectDraftPlanInputSchema,
   SendPushNotificationInputSchema,
-  ResearchSessionSchema,
-  RESEARCH_BUCKET,
-  RESEARCH_STATUS_PREFIX,
-  RESEARCH_RAW_PREFIX,
-  RESEARCH_CLEAN_PREFIX,
-  SCRAPER_SERVICE_APP_ID,
+  UpdateResearchSessionInputSchema,
+  TriageLLMResponseSchema,
+  ReviewLLMResponseSchema,
+  ScrapeCompletedPayloadSchema,
   SCRAPE_COMPLETED_EVENT,
-  RESEARCH_TIMEOUT_MS,
   MAX_RESEARCH_CYCLES,
-  type ResearchStatus,
-  type ResearchStatusDoc,
-  type TriageOutput,
+  RESEARCH_TIMEOUT_MS,
+  RESEARCH_MINIO_BUCKET,
+  LLM_MODEL_PRO,
+  LLM_MODEL_FLASH,
+  SCRAPER_SERVICE_APP_ID_RESEARCH,
+  MAX_RESEARCH_CONTEXT_CHARS,
+  TIMEOUT_SENTINEL,
+  type ResearchSessionStatus,
+  type ReviewVerdict,
   type ResearchAndPlanInput,
   type ResearchAndPlanOutput,
-  type ReviewResearchOutput,
+  type ArchitectTriageInput,
+  type ArchitectTriageOutput,
   type StartDeepResearchInput,
   type StartDeepResearchOutput,
   type ReviewResearchInput,
-  type DraftPlanInput,
-  type ArchitectTriageInput,
+  type ReviewResearchOutput,
+  type ArchitectDraftPlanInput,
   type SendPushNotificationInput,
-  type ResearchSession,
+  type UpdateResearchSessionInput,
+  type TriageLLMResponse,
+  type ReviewLLMResponse,
+  type ScrapeCompletedPayload,
 } from "./research-types.js";
 
-// Research MinIO helpers (Claim Check pattern)
+// Research MinIO helpers
 export {
+  ensureResearchBucket,
+  statusDocKey,
   writeResearchStatus,
   readResearchStatus,
+  rawResearchKey,
   uploadRawResearch,
   downloadRawResearch,
+  cleanResearchKey,
   uploadCleanResearch,
   downloadCleanResearch,
-  getResearchBucket,
+  type ResearchStatusDoc,
 } from "./research-minio.js";
 
-// Architect prompts
+// Architect reflection prompt
 export {
   ARCHITECT_REFLECTION_PROMPT,
-  ARCHITECT_TRIAGE_PROMPT,
-  RESEARCH_REVIEW_PROMPT,
-  ARCHITECT_DRAFT_PLAN_PROMPT,
+  buildArchitectReflectionSystem,
 } from "./prompts/architect-reflection.js";
 
-// Web research tools
+// Web research tools (scaffolded — see TODO in file)
 export {
   webResearchTools,
   buildResearchSystemPrompt,
-  type WebResearchTool,
 } from "./tools/web-research.js";

@@ -1,51 +1,28 @@
-/**
- * Web Research Tools Schema
- *
- * Defines tool schemas for research agents that need web access.
- * These are passed to LLM calls to enable grounded research via
- * Gemini native grounding or direct URL fetching.
- */
+// ---------------------------------------------------------------------------
+// Web Research Tool Schemas
+//
+// TODO: These tool schemas are scaffolded for future use with Gemini native
+// tool calling / grounding. Currently the triage and review activities use
+// prompt injection via chatCompletionWithSchema. Wire these into the LLM
+// calls when switching to native tool-use mode.
+// ---------------------------------------------------------------------------
 
-export interface WebResearchTool {
-  type: "function";
-  function: {
-    name: string;
-    description: string;
-    parameters?: {
-      type: string;
-      properties: Record<string, { type: string; description?: string }>;
-      required?: string[];
-    };
-  };
-}
-
-/**
- * Tool definitions for web research capabilities.
- * These are used in LLM call payloads to enable grounded search.
- */
-export const webResearchTools: WebResearchTool[] = [
+export const webResearchTools = [
   {
-    type: "function",
+    type: "function" as const,
     function: {
       name: "googleSearch",
-      description:
-        "Use Google Search for quick, real-time factual lookups and discovery. Returns search results with snippets.",
+      description: "Use Google Search for quick, real-time factual lookups and discovery.",
     },
   },
   {
-    type: "function",
+    type: "function" as const,
     function: {
       name: "web_fetch",
-      description:
-        "Extract the full markdown text of a specific URL. Use this to read full documentation pages, API references, and technical guides.",
+      description: "Extract the full markdown text of a specific URL. Use this to read full documentation pages.",
       parameters: {
         type: "object",
-        properties: {
-          url: {
-            type: "string",
-            description: "The URL to fetch and convert to markdown",
-          },
-        },
+        properties: { url: { type: "string" } },
         required: ["url"],
       },
     },
@@ -53,16 +30,14 @@ export const webResearchTools: WebResearchTool[] = [
 ];
 
 /**
- * Build a system prompt that includes web research tool usage instructions.
+ * Build a system prompt segment that instructs the LLM about available
+ * research capabilities.
  */
-export function buildResearchSystemPrompt(basePrompt: string): string {
-  return `${basePrompt}
+export function buildResearchSystemPrompt(): string {
+  return `You have access to the following research tools:
+- googleSearch: For real-time factual lookups via Google Search grounding.
+- web_fetch(url): To read the full content of a documentation page.
 
-You have access to web research tools:
-- googleSearch: For discovering relevant pages and getting quick factual answers
-- web_fetch: For reading full documentation pages when you have a specific URL
-
-Use these tools when you need information not available in your training data or the provided context.
-Prefer official documentation over blog posts or Stack Overflow answers.
-Always cite your sources with URLs.`;
+Use these tools when you need current information that may not be in your training data.
+Prefer official documentation over blog posts or Stack Overflow answers.`;
 }

@@ -20,7 +20,6 @@ import {
   tracedChatCompletion,
   chatCompletionWithSchema,
   ARCHITECT_ACTOR_TYPE,
-  createMinioClient,
   type AgentRegistration,
   type TaskRequest,
   type TaskResult,
@@ -56,8 +55,8 @@ import {
   syncPlanToIssue,
   updateProjectCustomFields,
 } from "./comment-activities.js";
-import { registerResearchWorkflow } from "./research-sub-workflow.js";
 import { createResearchActivities } from "./research-activities.js";
+import { createMinioClient, RESEARCH_MINIO_BUCKET } from "@mesh-six/core";
 
 // --- Configuration ---
 const AGENT_ID = process.env.AGENT_ID || "project-manager";
@@ -1956,28 +1955,31 @@ Categories:
       },
     };
 
-    // Create and start workflow runtime
-    workflowRuntime = createWorkflowRuntime(activityImplementations);
-
-    // Register ResearchAndPlan sub-workflow + activities
-    if (pgPool) {
+    // Create research activity implementations if MinIO is configured
+    const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || "";
+    const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY || "";
+    const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY || "";
+    if (MINIO_ENDPOINT && MINIO_ACCESS_KEY && MINIO_SECRET_KEY && pgPool) {
       const minioClient = createMinioClient({
-        endpoint: process.env.MINIO_ENDPOINT || "http://minio.minio:9000",
-        accessKeyId: process.env.MINIO_ACCESS_KEY || "",
-        secretAccessKey: process.env.MINIO_SECRET_KEY || "",
-        bucket: process.env.RESEARCH_BUCKET || "mesh-six-research",
+        endpoint: MINIO_ENDPOINT,
+        accessKeyId: MINIO_ACCESS_KEY,
+        secretAccessKey: MINIO_SECRET_KEY,
+        bucket: RESEARCH_MINIO_BUCKET,
       });
-      const researchActivities = createResearchActivities({
+      activityImplementations.researchActivities = createResearchActivities({
         daprClient,
         minioClient,
+        minioBucket: RESEARCH_MINIO_BUCKET,
         pgPool,
+        memory,
       });
-      registerResearchWorkflow(workflowRuntime, researchActivities);
-      console.log(`[${AGENT_ID}] Research sub-workflow registered`);
+      console.log(`[${AGENT_ID}] Research activities initialized`);
     } else {
-      console.warn(`[${AGENT_ID}] Skipping research sub-workflow (no DATABASE_URL)`);
+      console.log(`[${AGENT_ID}] Research activities skipped (MinIO or PG not configured)`);
     }
 
+    // Create and start workflow runtime
+    workflowRuntime = createWorkflowRuntime(activityImplementations);
     // Wrap start() to catch both sync and async gRPC stream errors
     // (durabletask-js can fail asynchronously on gRPC stream after start() resolves)
     await workflowRuntime.start().catch((err: Error) => {
