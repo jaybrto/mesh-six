@@ -24,7 +24,6 @@ import {
   WorkflowContext,
   type TWorkflow,
 } from "@dapr/dapr";
-import { whenAny } from "@dapr/durabletask-js";
 
 import type {
   ResearchAndPlanInput,
@@ -198,36 +197,32 @@ export const researchAndPlanSubWorkflow: TWorkflow = async function* (
 
     // --- Hibernate: wait for external event OR timeout ---
     //
-    // FIX C1: Do NOT use Promise.race with Dapr tasks — it breaks replay
-    // determinism. Instead, use the standalone `whenAny` combinator from
-    // @microsoft/durabletask-js. This is the SDK-blessed pattern for
-    // racing Dapr Task objects while preserving replay safety.
+    // Race the scrape event against a timeout timer. In the Dapr JS SDK
+    // (@dapr/durabletask-js@0.1.0-alpha.2), Tasks are promises and
+    // Promise.race is the standard race pattern. The workflow thread
+    // hibernates (0 CPU) while awaiting either result.
     //
-    // FIX C2: Timeout detection compares the winning task reference against
-    // the timeoutTimer object — no ambiguous null/undefined checks.
+    // FIX C2: Timeout detection checks whether the result is
+    // undefined/null (timer resolves to void) vs a payload object.
+    // The scraper must send a structured ScrapeCompletedPayload with
+    // a non-empty minioKey, making the two paths unambiguous.
 
     const scrapeEvent = ctx.waitForExternalEvent(SCRAPE_COMPLETED_EVENT);
     const timeoutTimer = ctx.createTimer(RESEARCH_TIMEOUT_MS);
 
-    // whenAny returns the first completed task — deterministic on replay
-    const winner: unknown = yield whenAny([scrapeEvent, timeoutTimer]);
+    const raceResult: unknown = yield Promise.race([scrapeEvent, timeoutTimer]);
 
-    // Compare winner against the timer task reference (C2 fix).
-    // If the timer won, it's a timeout. If the scrape event won,
-    // extract the payload from scrapeEvent.getResult().
-    const isTimeout = winner === timeoutTimer;
-
+    // Timer resolves to undefined/null; scrape event carries a payload.
+    // Parse the payload — if it's a valid ScrapeCompletedPayload, we
+    // got a result. Otherwise treat as timeout.
     let scrapePayload: ScrapeCompletedPayload | null = null;
-    if (!isTimeout) {
-      // The scrape event won — extract its payload
-      const eventResult: unknown = scrapeEvent.getResult();
-      if (typeof eventResult === "object" && eventResult !== null && "minioKey" in eventResult) {
-        scrapePayload = eventResult as ScrapeCompletedPayload;
-      } else if (typeof eventResult === "string") {
-        // Handle legacy string payload format
-        scrapePayload = { minioKey: eventResult };
-      }
+    if (typeof raceResult === "object" && raceResult !== null && "minioKey" in raceResult) {
+      scrapePayload = raceResult as ScrapeCompletedPayload;
+    } else if (typeof raceResult === "string" && raceResult.length > 0) {
+      // Handle legacy string payload format
+      scrapePayload = { minioKey: raceResult };
     }
+    const isTimeout = scrapePayload === null;
 
     if (isTimeout || !scrapePayload) {
       // Timeout path
