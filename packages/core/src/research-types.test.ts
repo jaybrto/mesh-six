@@ -56,7 +56,7 @@ describe("Research constants", () => {
 
 describe("ResearchSessionStatusSchema", () => {
   it("accepts all valid statuses", () => {
-    for (const s of ["TRIAGING", "DISPATCHED", "IN_PROGRESS", "REVIEW", "COMPLETED", "FAILED", "TIMEOUT"]) {
+    for (const s of ["TRIAGING", "DISPATCHED", "IN_PROGRESS", "REVIEW", "COMPLETED", "FAILED", "TIMEOUT"] as const) {
       expect(ResearchSessionStatusSchema.parse(s)).toBe(s);
     }
   });
