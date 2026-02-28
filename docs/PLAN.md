@@ -1288,6 +1288,38 @@ Event-driven Dapr Workflow with full lifecycle management:
 - **Auto-resolve**: two-agent cascade (architect → researcher) for blocked questions before human escalation
 - **Poll jitter**: 0-5s random jitter prevents synchronized polling from concurrent workflows
 
+### Research Sub-Workflow (`apps/project-manager/` — ResearchAndPlan)
+
+Dapr Durable Workflow sub-workflow for complex architectural planning requiring external research:
+- **Phases**: Triage (Gemini Pro) → Dispatch (scraper service) → Review (Gemini Flash) → Plan Draft (Gemini Pro) → Reflect (Mem0)
+- **Claim Check pattern** via MinIO for large research documents (`mesh-six-research` bucket)
+- **Timer-based hibernation** with external event wake-up using `whenAny()` from `@microsoft/durabletask-js` (replay-safe, not `Promise.race`)
+- **Iterative review loop** (max 3 cycles) with follow-up prompts for incomplete scrapes
+- **ntfy push notifications** for scraper timeouts and dispatch failures
+- **PostgreSQL `research_sessions` table** for lifecycle state tracking
+- **Mem0 integration**: reads scoped memories during triage (per `architectActorId`), writes reflections via `transitionClose()` after plan drafting using `ARCHITECT_REFLECTION_PROMPT`
+- **Generator delegation** (`yield*`) from main PM workflow — all sub-workflow activity yields flow through the main orchestration context, preserving Dapr replay determinism
+- **Graceful degradation**: when research fails/times out, failure context is injected into the plan draft prompt so the Architect explicitly flags uncertain areas instead of hallucinating
+
+Key files:
+- `apps/project-manager/src/research-sub-workflow.ts` — Workflow generator with 4 phases
+- `apps/project-manager/src/research-activities.ts` — Activity implementations with dependency injection factory
+- `packages/core/src/research-types.ts` — Zod schemas, constants, types
+- `packages/core/src/research-minio.ts` — MinIO helpers (upload/download/status/bucket auto-creation)
+- `packages/core/src/prompts/architect-reflection.ts` — Architect-specific Mem0 reflection prompt
+- `packages/core/src/tools/web-research.ts` — Web research tool schemas (scaffolded for future Gemini native tool calling)
+- `packages/core/src/research-types.test.ts` — 19 test cases covering all schemas and constants
+- `migrations/014_research_sessions.sql` — PostgreSQL table with indexes
+- `scripts/test-research-workflow.ts` — Multi-mode test script (triage/dispatch/review/offline/workflow)
+
+Environment variables:
+- `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` — MinIO S3 connection
+- `NTFY_SERVER` — Must be explicitly configured (no public fallback)
+- `NTFY_RESEARCH_TOPIC` — ntfy topic for research notifications (default: `mesh-six-research`)
+- `SCRAPER_SERVICE_APP_ID` — Dapr app-id of scraper service (default: `scraper-service`)
+- `LLM_MODEL_PRO` — Gemini Pro model for triage/planning (default: `gemini/gemini-1.5-pro`)
+- `LLM_MODEL_FLASH` — Gemini Flash model for review/validation (default: `gemini/gemini-1.5-flash`)
+
 ### Architect Agent Enhancement (`apps/architect-agent/` — ArchitectActor)
 
 Per-issue Dapr Actor with append-only event log:
@@ -1297,7 +1329,7 @@ Per-issue Dapr Actor with append-only event log:
 - Confidence-based responses: `{ confident: true, answer }` or `{ confident: false, bestGuess }`
 - Actor runtime wired into existing Hono service alongside traditional consultation endpoints
 
-### Core Library Additions (`@mesh-six/core` v0.9.0)
+### Core Library Additions (`@mesh-six/core` v0.10.0)
 
 - `GitHubProjectClient` — GitHub Projects v2 GraphQL + REST operations with `TokenBucket` rate limiter (50 burst, 80/min refill)
 - `BoardEvent` Zod discriminated union for typed board events
@@ -1308,6 +1340,10 @@ Per-issue Dapr Actor with append-only event log:
 - `comment-generator.ts` — LLM-powered GitHub comment generation: `generateComment`, `formatStatusComment`
 - `architect-actor.ts` — `ArchitectActorStateSchema`, `ArchitectEventSchema`, typed event payloads
 - Auth/session types: `ProjectConfigSchema`, `CredentialPushRequestSchema`, `ImplementationSessionSchema`, `SessionQuestionSchema`
+- `research-types.ts` — Research sub-workflow Zod schemas: `ResearchAndPlanInput/Output`, `ArchitectTriageInput/Output`, `StartDeepResearchInput/Output`, `ReviewResearchInput/Output`, `ArchitectDraftPlanInput`, `TriageLLMResponseSchema`, `ReviewLLMResponseSchema`, `ScrapeCompletedPayloadSchema`, constants (`SCRAPE_COMPLETED_EVENT`, `MAX_RESEARCH_CYCLES`, `RESEARCH_TIMEOUT_MS`, `LLM_MODEL_PRO`, `LLM_MODEL_FLASH`)
+- `research-minio.ts` — Research-specific MinIO helpers: `ensureResearchBucket`, `writeResearchStatus`/`readResearchStatus`, `uploadRawResearch`/`downloadRawResearch`, `uploadCleanResearch`/`downloadCleanResearch`, canonical key builders (`statusDocKey`, `rawResearchKey`, `cleanResearchKey`)
+- `prompts/architect-reflection.ts` — `ARCHITECT_REFLECTION_PROMPT` for Mem0 memory extraction after research & planning phases, `buildArchitectReflectionSystem` helper
+- `tools/web-research.ts` — `webResearchTools` schema and `buildResearchSystemPrompt` (scaffolded for future Gemini native tool calling)
 
 ### Database Migrations
 
@@ -1317,6 +1353,10 @@ Per-issue Dapr Actor with append-only event log:
 - `008_pm_retry_budget.sql` — Retry budget columns on `pm_workflow_instances`
 - `009_architect_events.sql` — `architect_events` append-only log
 - `010_session_resume_fields.sql` — `claude_session_id`, `session_checkpoints` table
+- `011_terminal_streaming.sql` — `terminal_snapshots`, `terminal_recordings` tables
+- `012_onboarding_runs.sql` — `onboarding_runs` table for onboarding-service workflow state
+- `013_orchestrator_tasks.sql` — `orchestrator_tasks` for pod restart recovery
+- `014_research_sessions.sql` — `research_sessions` table with `task_id`, `workflow_id`, `status`, `raw_minio_key`, `clean_minio_key`, `research_cycles`; indexes on `workflow_id`, `task_id`, and `(repo_owner, repo_name, issue_number)`
 
 ### Operational Infrastructure
 
@@ -1328,6 +1368,7 @@ Per-issue Dapr Actor with append-only event log:
 - `debug-db.ts` — Database diagnostics (active workflows, sessions, pending questions)
 - `onboard-repo.ts` — Register repo + create GitHub Projects v2 with standard columns/fields
 - `setup-project.ts` — One-time auth project setup
+- `test-research-workflow.ts` — Multi-mode research workflow tests (`--mode=triage|dispatch|review|offline|workflow`)
 
 **K8s CronJobs**:
 - `cleanup-cronjob` — Daily 3am: `scripts/cleanup.ts` with 7-day session retention, 30-day log retention
@@ -2068,6 +2109,12 @@ mesh-six/
 │       │   ├── pr-filter.ts     # PR/issue filtering (author, label, branch, draft)
 │       │   ├── comment-generator.ts # LLM-powered GitHub comment generation
 │       │   ├── architect-actor.ts # ArchitectActor types and event schemas
+│       │   ├── research-types.ts  # Research sub-workflow Zod schemas + constants
+│       │   ├── research-minio.ts  # Research MinIO helpers (claim check pattern)
+│       │   ├── prompts/
+│       │   │   └── architect-reflection.ts  # Mem0 reflection prompt for Architect
+│       │   ├── tools/
+│       │   │   └── web-research.ts  # Web research tool schemas (scaffolded)
 │       │   └── index.ts         # Public exports
 │       ├── __tests__/           # Test suite
 │       ├── package.json
@@ -2104,7 +2151,8 @@ mesh-six/
 │   ├── credential-history.ts    # Credential audit trail report
 │   ├── debug-db.ts              # Database diagnostics
 │   ├── onboard-repo.ts          # Register repo in repo_registry + setup GitHub Project
-│   └── setup-project.ts         # One-time auth project setup
+│   ├── setup-project.ts         # One-time auth project setup
+│   └── test-research-workflow.ts # Research sub-workflow test script
 ├── docs/
 │   ├── PLAN.md                  # This document — architecture and milestones
 │   ├── PLAN_45_GWA.md           # Detailed GWA integration plan
@@ -2144,7 +2192,11 @@ mesh-six/
 │   ├── 007_session_tables.sql
 │   ├── 008_pm_retry_budget.sql
 │   ├── 009_architect_events.sql
-│   └── 010_session_resume_fields.sql
+│   ├── 010_session_resume_fields.sql
+│   ├── 011_terminal_streaming.sql
+│   ├── 012_onboarding_runs.sql
+│   ├── 013_orchestrator_tasks.sql
+│   └── 014_research_sessions.sql
 ├── docker/
 │   ├── Dockerfile.agent         # Shared Dockerfile for Bun agents
 │   ├── Dockerfile.implementer   # Custom: Bun + tmux + git + Claude CLI
@@ -2240,4 +2292,4 @@ Milestones are designed to be completed in order. Each builds on the infrastruct
 
 *Document created: February 10, 2026*
 *Architecture designed through iterative discussion between Jay and Claude*
-*Last updated: v1.5 — GWA migration (M4.5 expansion), replaced Vercel AI SDK with direct LiteLLM module, added auth-service/implementer/llm-service/webhook-receiver, updated repository structure and deployment strategy*
+*Last updated: v1.6 — ResearchAndPlan sub-workflow (PR #13), claim check pattern via MinIO, whenAny-based hibernation, Mem0 reflection after planning, research-types/research-minio/architect-reflection/web-research core modules, 014_research_sessions migration*

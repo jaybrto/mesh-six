@@ -55,6 +55,8 @@ import {
   syncPlanToIssue,
   updateProjectCustomFields,
 } from "./comment-activities.js";
+import { createResearchActivities } from "./research-activities.js";
+import { createMinioClient, RESEARCH_MINIO_BUCKET } from "@mesh-six/core";
 
 // --- Configuration ---
 const AGENT_ID = process.env.AGENT_ID || "project-manager";
@@ -1952,6 +1954,29 @@ Categories:
         await updateProjectCustomFields(ctx, input);
       },
     };
+
+    // Create research activity implementations if MinIO is configured
+    const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || "";
+    const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY || "";
+    const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY || "";
+    if (MINIO_ENDPOINT && MINIO_ACCESS_KEY && MINIO_SECRET_KEY && pgPool) {
+      const minioClient = createMinioClient({
+        endpoint: MINIO_ENDPOINT,
+        accessKeyId: MINIO_ACCESS_KEY,
+        secretAccessKey: MINIO_SECRET_KEY,
+        bucket: RESEARCH_MINIO_BUCKET,
+      });
+      activityImplementations.researchActivities = createResearchActivities({
+        daprClient,
+        minioClient,
+        minioBucket: RESEARCH_MINIO_BUCKET,
+        pgPool,
+        memory,
+      });
+      console.log(`[${AGENT_ID}] Research activities initialized`);
+    } else {
+      console.log(`[${AGENT_ID}] Research activities skipped (MinIO or PG not configured)`);
+    }
 
     // Create and start workflow runtime
     workflowRuntime = createWorkflowRuntime(activityImplementations);
