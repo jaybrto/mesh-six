@@ -8,10 +8,16 @@
 
 import { config } from "./config.js";
 
+/** Current version of the ScrapeCompleted contract */
+export const SCRAPE_COMPLETED_CONTRACT_VERSION = 1;
+
 export interface ScrapeCompletedEvent {
+  contractVersion: number;
+  taskId: string;
   minioResultPath: string;
   success: boolean;
   error?: string;
+  completedAt: string;
 }
 
 /**
@@ -21,10 +27,17 @@ export interface ScrapeCompletedEvent {
  */
 export async function raiseScrapeCompleted(
   taskId: string,
-  event: ScrapeCompletedEvent,
-  workflowName = "FeatureWorkflow",
-  eventName = "ScrapeCompleted",
+  event: Omit<ScrapeCompletedEvent, "contractVersion" | "taskId" | "completedAt">,
+  workflowName = config.DAPR_WORKFLOW_NAME,
+  eventName = config.DAPR_SCRAPE_EVENT_NAME,
 ): Promise<void> {
+  const envelope: ScrapeCompletedEvent = {
+    ...event,
+    contractVersion: SCRAPE_COMPLETED_CONTRACT_VERSION,
+    taskId,
+    completedAt: new Date().toISOString(),
+  };
+
   const url = `${config.K3S_DAPR_URL}/v1.0-alpha1/workflows/dapr/${workflowName}/${taskId}/raiseEvent/${eventName}`;
 
   console.log(`[dapr] Raising ${eventName} on workflow ${taskId}`);
@@ -32,7 +45,7 @@ export async function raiseScrapeCompleted(
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(event),
+    body: JSON.stringify(envelope),
   });
 
   if (!response.ok) {

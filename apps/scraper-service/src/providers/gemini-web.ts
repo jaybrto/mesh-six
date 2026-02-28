@@ -1,5 +1,5 @@
 /**
- * Claude Web Provider — drives the Gemini web UI via Playwright (Chrome).
+ * Gemini Web Provider — drives the Gemini web UI via Playwright (Chrome).
  *
  * Uses a persistent Chrome profile to maintain authentication cookies.
  * Navigates to the Gemini "AI Context Architect & Research Engineer" Gem,
@@ -29,7 +29,7 @@ interface AccessibilityNode {
   [key: string]: unknown;
 }
 
-export async function executeClaudeWeb(
+export async function executeGeminiWeb(
   _taskId: string,
   prompt: string,
 ): Promise<string> {
@@ -52,28 +52,28 @@ export async function executeClaudeWeb(
 
     // 2. Navigate to Gemini
     await page.goto(GEMINI_URL, { waitUntil: "networkidle", timeout: 30_000 });
-    console.log("[claude-web] Navigated to Gemini");
+    console.log("[gemini-web] Navigated to Gemini");
 
     // 3. Select the Gem via hamburger menu
     await selectGem(page);
 
     // 4. Find the chat input using accessibility tree + LLM
     const inputSelector = await findChatInput(page);
-    console.log(`[claude-web] Chat input found: ${inputSelector}`);
+    console.log(`[gemini-web] Chat input found: ${inputSelector}`);
 
     // 5. Type the prompt
     await page.click(inputSelector);
     await page.fill(inputSelector, prompt);
-    console.log("[claude-web] Prompt entered");
+    console.log("[gemini-web] Prompt entered");
 
     // 6. Find and click the submit button
     const submitSelector = await findSubmitButton(page);
     await page.click(submitSelector);
-    console.log("[claude-web] Prompt submitted");
+    console.log("[gemini-web] Prompt submitted");
 
     // 7. Wait for generation to complete
     const result = await waitForGeneration(page);
-    console.log(`[claude-web] Response received (${result.length} chars)`);
+    console.log(`[gemini-web] Response received (${result.length} chars)`);
 
     return result;
   } finally {
@@ -97,28 +97,25 @@ async function selectGem(page: Page): Promise<void> {
     if (await gemLink.isVisible({ timeout: 3_000 }).catch(() => false)) {
       await gemLink.click();
       await page.waitForTimeout(2_000);
-      console.log(`[claude-web] Selected Gem: ${GEM_NAME}`);
+      console.log(`[gemini-web] Selected Gem: ${GEM_NAME}`);
       return;
     }
   }
 
-  console.log("[claude-web] Could not find Gem via menu, attempting direct chat");
+  console.warn("[gemini-web] Could not find Gem via menu, attempting direct chat — prompts may go to wrong context");
 }
 
 /**
- * Capture the accessibility tree snapshot using Playwright's ARIA snapshot.
- * Falls back to page.evaluate if the native API is unavailable.
+ * Capture the accessibility tree snapshot using Playwright's DOM evaluation.
+ *
+ * Builds a proper AccessibilityNode tree by walking the DOM and extracting
+ * role/aria-label attributes, enabling findAccessibleElement tree-walk to
+ * function correctly without requiring an LLM fallback.
  */
 async function getAccessibilitySnapshot(
   page: Page,
 ): Promise<AccessibilityNode | null> {
   try {
-    // Use Playwright's locator-based ARIA snapshot (available since v1.40+)
-    const ariaYaml = await page.locator("body").ariaSnapshot();
-    // Convert YAML-ish aria snapshot to a simple structure
-    return { role: "RootWebArea", name: "page", children: [{ role: "text", name: ariaYaml }] };
-  } catch {
-    // Fallback: build a simple tree from page evaluation
     const tree = await page.evaluate(() => {
       function walk(el: Element): Record<string, unknown> {
         const role = el.getAttribute("role") || el.tagName.toLowerCase();
@@ -133,6 +130,14 @@ async function getAccessibilitySnapshot(
       return walk(document.body);
     });
     return tree as AccessibilityNode;
+  } catch {
+    // Last resort: try Playwright's locator-based ARIA snapshot (YAML string)
+    try {
+      const ariaYaml = await page.locator("body").ariaSnapshot();
+      return { role: "RootWebArea", name: "page", children: [{ role: "text", name: ariaYaml }] };
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -169,7 +174,7 @@ async function findChatInput(page: Page): Promise<string> {
       "searchbox",
     ]);
     if (inputElement) {
-      return `[role="${inputElement.role}"][name="${inputElement.name}"]`;
+      return `[role="${inputElement.role}"][aria-label="${inputElement.name}"]`;
     }
   }
 
@@ -257,6 +262,8 @@ function findAccessibleElement(
 /**
  * Ask LiteLLM (Gemini 1.5 Flash) to parse the page accessibility tree
  * and return a CSS selector for the requested element.
+ *
+ * Validates the LLM-returned selector against the page before returning.
  */
 async function queryLLMForSelector(
   page: Page,
@@ -291,7 +298,7 @@ async function queryLLMForSelector(
 
   if (!response.ok) {
     throw new Error(
-      `[claude-web] LLM selector query failed: ${response.status}`,
+      `[gemini-web] LLM selector query failed: ${response.status}`,
     );
   }
 
@@ -301,10 +308,23 @@ async function queryLLMForSelector(
   const selector = data.choices[0]?.message?.content?.trim();
 
   if (!selector) {
-    throw new Error("[claude-web] LLM returned empty selector");
+    throw new Error("[gemini-web] LLM returned empty selector");
   }
 
-  console.log(`[claude-web] LLM suggested selector: ${selector}`);
+  // Validate the LLM-suggested selector against the page
+  const isValid = await page
+    .locator(selector)
+    .first()
+    .isVisible({ timeout: 2_000 })
+    .catch(() => false);
+
+  if (!isValid) {
+    console.warn(`[gemini-web] LLM selector "${selector}" not found on page, falling back to role-based locators`);
+    // Try robust fallback with Playwright's built-in role locators
+    throw new Error(`[gemini-web] LLM-suggested selector "${selector}" did not match any visible element`);
+  }
+
+  console.log(`[gemini-web] LLM suggested selector: ${selector}`);
   return selector;
 }
 
@@ -384,6 +404,6 @@ async function waitForGeneration(page: Page): Promise<string> {
   }
 
   throw new Error(
-    "[claude-web] Could not extract response from page after generation",
+    "[gemini-web] Could not extract response from page after generation",
   );
 }

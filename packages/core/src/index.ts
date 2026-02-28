@@ -262,6 +262,7 @@ export {
   ScrapeDispatchPayloadSchema,
   ScrapeStatusFileSchema,
   ScrapeAckResponseSchema,
+  ScrapeValidationErrorSchema,
   SCRAPER_SERVICE_APP_ID,
   SCRAPER_MINIO_BUCKET,
   SCRAPER_MINIO_PREFIX,
@@ -270,6 +271,7 @@ export {
   type ScrapeDispatchPayload,
   type ScrapeStatusFile,
   type ScrapeAckResponse,
+  type ScrapeValidationError,
 } from "./scraper-types.js";
 
 // OpenTelemetry initialization

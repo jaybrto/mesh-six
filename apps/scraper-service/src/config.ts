@@ -28,14 +28,21 @@ export const config = {
     "/Applications/Windsurf.app/Contents/MacOS/Electron",
   CHROME_PROFILE_DIR:
     process.env.CHROME_PROFILE_DIR ||
-    `${process.env.HOME || "/Users/jay"}/.config/scraper-chrome-profile`,
+    `${process.env.HOME || ""}/.config/scraper-chrome-profile`,
   WINDSURF_WORKSPACE_BASE:
     process.env.WINDSURF_WORKSPACE_BASE ||
-    `${process.env.HOME || "/Users/jay"}/scraper-workspaces`,
+    `${process.env.HOME || ""}/scraper-workspaces`,
 
-  // Dapr Workflow base URL on k3s (for raising external events)
+  // Dapr Workflow callback config (for raising external events on k3s)
   K3S_DAPR_URL:
     process.env.K3S_DAPR_URL || "http://localhost:3500",
+  DAPR_WORKFLOW_NAME:
+    process.env.DAPR_WORKFLOW_NAME || "FeatureWorkflow",
+  DAPR_SCRAPE_EVENT_NAME:
+    process.env.DAPR_SCRAPE_EVENT_NAME || "ScrapeCompleted",
+
+  // Request body size limit (bytes)
+  MAX_BODY_SIZE: Number(process.env.MAX_BODY_SIZE) || 1_048_576, // 1MB
 
   // OpenTelemetry
   OTEL_ENDPOINT:
