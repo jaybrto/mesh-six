@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed - 2026-02-28: Scraper Service Bug Fixes
+
+**@mesh-six/scraper-service@0.1.1**
+- `src/dapr-events.ts`: Fix `ScrapeCompletedEvent` envelope to prevent `contractVersion`, `taskId`, and `completedAt` from being overwritten by caller-provided event spread
+- `src/providers/windsurf.ts`: Fix `waitForOutput` polling order to check `.done` flag first (primary completion signal) before falling back to `output.md` reading, preventing truncated content from race conditions
+
+**@mesh-six/core@0.12.1**
+- No changes (version bump for consistency)
+
 ### Added - 2026-02-28: Research & Plan Sub-Workflow (PR #13 Review Fixes)
 
 Implements the ResearchAndPlanSubWorkflow with all fixes from 4-model PR review (Claude Opus, Gemini 3.1 Pro, Claude Sonnet, GPT 5.3-Codex). Triage-escalate-review loop with Mem0 integration.

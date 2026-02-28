@@ -40,6 +40,13 @@ mesh-six/
 └── README.md                    # High-level project summary
 ```
 
+## Implementation Patterns
+
+Key coding patterns and fixes discovered during development:
+
+- **Event envelope protection**: When creating Dapr events with versioned envelopes, place fixed fields (`contractVersion`, `taskId`, `completedAt`) before spreading variable event data to prevent accidental overwrites by caller-provided data.
+- **File polling order**: When polling for completion signals, check completion flags (e.g., `.done`) first before reading content files (e.g., `output.md`) to prevent race conditions that could return truncated content.
+
 ## Key Technologies
 
 - **Runtime:** [Bun](https://bun.sh/)
