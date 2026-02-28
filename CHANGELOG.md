@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-28: Research & Plan Sub-Workflow (PR #13 Review Fixes)
+
+Implements the ResearchAndPlanSubWorkflow with all fixes from 4-model PR review (Claude Opus, Gemini 3.1 Pro, Claude Sonnet, GPT 5.3-Codex). Triage-escalate-review loop with Mem0 integration.
+
+**@mesh-six/core@0.12.0**
+- `src/research-types.ts`: Zod schemas for research sub-workflow — `ResearchAndPlanInput/Output`, `ArchitectTriageInput/Output`, `StartDeepResearchInput/Output`, `ReviewResearchInput/Output`, `ArchitectDraftPlanInput`, `TriageLLMResponseSchema`, `ReviewLLMResponseSchema`, `ScrapeCompletedPayloadSchema`, constants (`SCRAPE_COMPLETED_EVENT`, `MAX_RESEARCH_CYCLES`, `RESEARCH_TIMEOUT_MS`, `LLM_MODEL_PRO`, `LLM_MODEL_FLASH`, `MAX_RESEARCH_CONTEXT_CHARS`, `SCRAPER_SERVICE_APP_ID_RESEARCH`)
+- `src/research-minio.ts`: MinIO Claim Check helpers — `ensureResearchBucket`, `writeResearchStatus`/`readResearchStatus`, `uploadRawResearch`/`downloadRawResearch`/`uploadCleanResearch`/`downloadCleanResearch`, canonical key builders (`statusDocKey`, `rawResearchKey`, `cleanResearchKey`)
+- `src/prompts/architect-reflection.ts`: `ARCHITECT_REFLECTION_PROMPT` for Mem0 memory extraction, `buildArchitectReflectionSystem`
+- `src/tools/web-research.ts`: `webResearchTools` schema, `buildResearchSystemPrompt` (scaffolded for future Gemini native tool calling)
+- `src/research-types.test.ts`: 19 unit tests covering all schemas and constants
+- `src/index.ts`: Exports all new research modules
+
+**@mesh-six/project-manager@0.8.1**
+- `src/research-sub-workflow.ts`: Dapr Durable Workflow with `whenAny()` from `@microsoft/durabletask-js` (replay-safe, not Promise.race — C1 fix), task reference timeout detection (C2 fix), `yield*` generator delegation from main workflow, `isResearchWorkflowAvailable()` guard, iterative review loop (max 3 cycles), Mem0 `reflectAndStore` phase
+- `src/research-activities.ts`: Activities with dependency injection factory — `architectTriage` (Mem0 reads + Gemini Pro), `startDeepResearch` (claim check + scraper dispatch), `reviewResearch` (Gemini Flash + 500k char limit), `architectDraftPlan` (failure context injection), `reflectAndStore` (Mem0 via `transitionClose`), `sendPushNotification`, `updateResearchSession`
+- `src/workflow.ts`: Research sub-workflow wired into non-simple planning path, guarded by `isResearchWorkflowAvailable()`
+- `src/index.ts`: MinIO client + research activities registration with AgentMemory passthrough
+- `package.json`: Added `pg` and `@types/pg` dependencies (M3 fix)
+
+**Database**
+- `migrations/014_research_sessions.sql`: `research_sessions` table with `workflow_id` (H2 fix), `raw_minio_key` (H4 fix), `research_cycles`, indexes on workflow_id/task_id/issue
+
+**Scripts**
+- `scripts/test-research-workflow.ts`: Multi-mode test script (`--mode=triage|dispatch|review|offline|workflow`) with both `--mode=X` and `--mode X` arg formats (L1 fix)
+
+**Documentation**
+- `docs/PLAN.md`: Updated to v1.6 with research sub-workflow section, core library additions, migration list, repo structure
+- `CLAUDE.md`: Added research workflow conventions (whenAny, yield*, MinIO keys, Mem0 reflection, truncation limits)
+- `README.md`: Full rewrite reflecting current project scope
+
 ### Added - 2026-02-27: Mac Mini Scraper Service
 
 New stateless RPA worker service for the standalone Mac mini. Acts as the "brawn" for the k3s ResearcherActor — drives Windsurf IDE (Electron) and Gemini web UI (Chrome) via Playwright, communicates via Dapr Service Invocation, and uses the MinIO S3 Claim Check pattern for payload management.

@@ -254,6 +254,7 @@ export {
   getPresignedUrl as getMinioPresignedUrl,
   type MinioConfig,
 } from "./minio.js";
+export type { S3Client } from "@aws-sdk/client-s3";
 
 // Mac Mini Scraper Service
 export {
@@ -276,3 +277,75 @@ export {
 
 // OpenTelemetry initialization
 export { initTelemetry, type TelemetryConfig } from "./telemetry.js";
+
+// Research Sub-Workflow types
+export {
+  ResearchSessionStatusSchema,
+  ReviewVerdictSchema,
+  ResearchAndPlanInputSchema,
+  ResearchAndPlanOutputSchema,
+  ArchitectTriageInputSchema,
+  ArchitectTriageOutputSchema,
+  StartDeepResearchInputSchema,
+  StartDeepResearchOutputSchema,
+  ReviewResearchInputSchema,
+  ReviewResearchOutputSchema,
+  ArchitectDraftPlanInputSchema,
+  SendPushNotificationInputSchema,
+  UpdateResearchSessionInputSchema,
+  TriageLLMResponseSchema,
+  ReviewLLMResponseSchema,
+  ScrapeCompletedPayloadSchema,
+  SCRAPE_COMPLETED_EVENT,
+  MAX_RESEARCH_CYCLES,
+  RESEARCH_TIMEOUT_MS,
+  RESEARCH_MINIO_BUCKET,
+  LLM_MODEL_PRO,
+  LLM_MODEL_FLASH,
+  SCRAPER_SERVICE_APP_ID_RESEARCH,
+  MAX_RESEARCH_CONTEXT_CHARS,
+  TIMEOUT_SENTINEL,
+  type ResearchSessionStatus,
+  type ReviewVerdict,
+  type ResearchAndPlanInput,
+  type ResearchAndPlanOutput,
+  type ArchitectTriageInput,
+  type ArchitectTriageOutput,
+  type StartDeepResearchInput,
+  type StartDeepResearchOutput,
+  type ReviewResearchInput,
+  type ReviewResearchOutput,
+  type ArchitectDraftPlanInput,
+  type SendPushNotificationInput,
+  type UpdateResearchSessionInput,
+  type TriageLLMResponse,
+  type ReviewLLMResponse,
+  type ScrapeCompletedPayload,
+} from "./research-types.js";
+
+// Research MinIO helpers
+export {
+  ensureResearchBucket,
+  statusDocKey,
+  writeResearchStatus,
+  readResearchStatus,
+  rawResearchKey,
+  uploadRawResearch,
+  downloadRawResearch,
+  cleanResearchKey,
+  uploadCleanResearch,
+  downloadCleanResearch,
+  type ResearchStatusDoc,
+} from "./research-minio.js";
+
+// Architect reflection prompt
+export {
+  ARCHITECT_REFLECTION_PROMPT,
+  buildArchitectReflectionSystem,
+} from "./prompts/architect-reflection.js";
+
+// Web research tools (scaffolded — see TODO in file)
+export {
+  webResearchTools,
+  buildResearchSystemPrompt,
+} from "./tools/web-research.js";

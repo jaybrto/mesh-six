@@ -257,9 +257,10 @@
     },
     "apps/project-manager": {
       "name": "@mesh-six/project-manager",
-      "version": "0.7.1",
+      "version": "0.8.1",
       "dependencies": {
         "@dapr/dapr": "^3.6.1",
+        "@dapr/durabletask-js": "0.1.0-alpha.2",
         "@mesh-six/core": "workspace:*",
         "@octokit/graphql": "^8.2.1",
         "@octokit/rest": "^21.0.0",
@@ -368,7 +369,7 @@
     },
     "packages/core": {
       "name": "@mesh-six/core",
-      "version": "0.11.0",
+      "version": "0.12.0",
       "dependencies": {
         "@aws-sdk/client-s3": "^3.750.0",
         "@aws-sdk/s3-request-presigner": "^3.750.0",
