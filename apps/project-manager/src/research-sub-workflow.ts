@@ -24,7 +24,7 @@ import {
   WorkflowContext,
   type TWorkflow,
 } from "@dapr/dapr";
-import { whenAny } from "@microsoft/durabletask-js";
+import { whenAny } from "@dapr/durabletask-js";
 
 import type {
   ResearchAndPlanInput,
