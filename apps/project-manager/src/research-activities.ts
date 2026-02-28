@@ -17,7 +17,6 @@
 
 import type { WorkflowActivityContext } from "@dapr/dapr";
 import { DaprClient, HttpMethod } from "@dapr/dapr";
-import type { S3Client } from "@aws-sdk/client-s3";
 import type { Pool } from "pg";
 
 import {
@@ -25,6 +24,7 @@ import {
   chatCompletion,
   transitionClose,
   type AgentMemory,
+  type S3Client,
   type ArchitectTriageInput,
   type ArchitectTriageOutput,
   type StartDeepResearchInput,

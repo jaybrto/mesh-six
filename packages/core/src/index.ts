@@ -254,6 +254,7 @@ export {
   getPresignedUrl as getMinioPresignedUrl,
   type MinioConfig,
 } from "./minio.js";
+export type { S3Client } from "@aws-sdk/client-s3";
 
 // Mac Mini Scraper Service
 export {
