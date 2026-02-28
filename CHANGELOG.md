@@ -19,7 +19,7 @@ Implements the ResearchAndPlanSubWorkflow with all fixes from 4-model PR review 
 - `src/research-types.test.ts`: 19 unit tests covering all schemas and constants
 - `src/index.ts`: Exports all new research modules
 
-**@mesh-six/project-manager@0.8.0**
+**@mesh-six/project-manager@0.8.1**
 - `src/research-sub-workflow.ts`: Dapr Durable Workflow with `whenAny()` from `@microsoft/durabletask-js` (replay-safe, not Promise.race — C1 fix), task reference timeout detection (C2 fix), `yield*` generator delegation from main workflow, `isResearchWorkflowAvailable()` guard, iterative review loop (max 3 cycles), Mem0 `reflectAndStore` phase
 - `src/research-activities.ts`: Activities with dependency injection factory — `architectTriage` (Mem0 reads + Gemini Pro), `startDeepResearch` (claim check + scraper dispatch), `reviewResearch` (Gemini Flash + 500k char limit), `architectDraftPlan` (failure context injection), `reflectAndStore` (Mem0 via `transitionClose`), `sendPushNotification`, `updateResearchSession`
 - `src/workflow.ts`: Research sub-workflow wired into non-simple planning path, guarded by `isResearchWorkflowAvailable()`
