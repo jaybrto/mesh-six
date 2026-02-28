@@ -10,8 +10,9 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@mesh-six/core": "workspace:*",
     "@dapr/dapr": "^3.6.1",
+    "@dapr/durabletask-js": "0.1.0-alpha.2",
+    "@mesh-six/core": "workspace:*",
     "@octokit/graphql": "^8.2.1",
     "@octokit/rest": "^21.0.0",
     "hono": "^4.7.4",
